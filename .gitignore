@@ -20,6 +20,7 @@ prov/*
 !prov/prov_dashboard_oura.py
 !prov/prov_vaken.py
 !prov/prov_sparr.py
+!prov/prov_passtyper.py
 
 # Interna anteckningar
 CLAUDE.md

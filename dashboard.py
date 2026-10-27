@@ -4,6 +4,7 @@ import sqlite3
 
 import numpy as np
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
@@ -12,6 +13,7 @@ import db as dbm
 import jobs
 import modell
 import oura
+import passtyper
 import planering
 import sync
 import updater
@@ -183,6 +185,14 @@ def load_acts(v) -> pd.DataFrame:
 def run_model(v) -> dict:
     with sqlite3.connect(DB_PATH) as con:
         return modell.kor(con)
+
+
+@st.cache_data(show_spinner=False)
+def passtyp_data(v) -> dict:
+    """Passtyperna över alla pass (punkt 8 och 9). Sjukdygnen från modellen tas bort ur kostnaderna."""
+    R = run_model(v)
+    with sqlite3.connect(DB_PATH) as con:
+        return passtyper.bygg(con, R.get("sjuk", []) if R.get("ok") else [])
 
 
 @st.cache_resource(max_entries=1, show_spinner=False)
@@ -1027,6 +1037,72 @@ with tab_train:
             ["start_local", "name", "type_key", "min", "training_load", "aerobic_te", "avg_hr"]]
         show.columns = ["Start", "Namn", "Typ", "Minuter", "Last", "Aerob TE", "Medelpuls"]
         st.dataframe(show.round(1), hide_index=True, width="stretch", height=320)
+
+    # Passtyper (punkt 8 och 9): alla pass, oberoende av vald period
+    st.markdown("#### Dina passtyper")
+    PT = passtyp_data(v)
+    if not PT["ok"]:
+        st.info(PT["skal"])
+    else:
+        st.markdown("Varje punkt är ett pass, placerat efter längd, last, intensitet, puls och tid på dygnet. "
+                    "Pass som ligger nära varandra liknar varandra. Appen delar in dem i typer och räknar vad "
+                    "varje typ kostar i HRV natten efter.")
+        farg = st.radio("Färga efter", ["Passtyp", "Sport", "Veckodag", "Månad", "Säsong", "År"], horizontal=True,
+                        key="pt_farg")
+        kl_namn = {k["id"]: f"Typ {k['id'] + 1}: {k['beskrivning']}" for k in PT["kluster"]}
+        pdf = pd.DataFrame(PT["pass"])
+        pdf["pc1"], pdf["pc2"] = PT["poang"][:, 0], PT["poang"][:, 1]
+        dts = pd.to_datetime(pdf["date"])
+        kategori = {
+            "Passtyp": (pdf["kluster"].map(kl_namn), [kl_namn[k] for k in sorted(kl_namn)]),
+            "Sport": (pdf["grupp"].map(GRUPPNAMN), [GRUPPNAMN[g] for g in GRUPPNAMN if g in set(pdf["grupp"])]),
+            "Veckodag": (dts.dt.weekday.map(lambda i: passtyper.VECKODAGAR[i]), passtyper.VECKODAGAR),
+            "Månad": (dts.dt.month.map(lambda m: MANADER[m - 1]), MANADER),
+            "Säsong": (dts.dt.month.map(passtyper.SASONG), ["vinter", "vår", "sommar", "höst"]),
+            "År": (dts.dt.year.astype(str), sorted(dts.dt.year.astype(str).unique())),
+        }
+        vals, ordning = kategori[farg]
+        if farg == "Månad":     # cyklisk skala: december och januari ligger nära varandra
+            palett = px.colors.sample_colorscale("Twilight", [i / 12 for i in range(12)])
+        elif farg == "År":      # ordnad skala: gammalt blekt, nytt mörkt
+            palett = px.colors.sample_colorscale("Viridis", [i / max(1, len(ordning) - 1) for i in range(len(ordning))])
+        else:
+            palett = SERIES + [MUTED, "#8c564b", "#17becf"]
+        fig = go.Figure()
+        for i, kat in enumerate(ordning):
+            m = vals == kat
+            if not m.any():
+                continue
+            sub = pdf[m]
+            fig.add_scatter(
+                x=sub["pc1"], y=sub["pc2"], mode="markers", name=f"{kat} ({m.sum()})",
+                marker=dict(size=6, color=palett[i % len(palett)], opacity=.7, line=dict(width=0)),
+                customdata=np.c_[sub["date"], sub["typ"], sub["min"].round(0), sub["load"].round(0)],
+                hovertemplate="%{customdata[0]} · %{customdata[1]}<br>%{customdata[2]} min · last %{customdata[3]}"
+                              "<extra></extra>")
+        f1, f2 = PT["forklarad"][0], PT["forklarad"][1]
+        style(fig, 460, hovermode="closest", title="Alla dina pass",
+              xaxis_title=f"Huvudaxel 1 ({fmt(f1 * 100, 0)} %): {passtyper.pc_namn(PT, 0)}",
+              yaxis_title=f"Huvudaxel 2 ({fmt(f2 * 100, 0)} %): {passtyper.pc_namn(PT, 1)}",
+              legend=dict(orientation="v", x=1.01, y=1, xanchor="left", yanchor="top"))
+        st.plotly_chart(fig, width="stretch")
+        if max(PT["silhuett"].values()) < 0.25:
+            st.caption("Dina pass bildar mer en glidande skala än tydligt avgränsade typer, så indelningen är ungefärlig. "
+                       "Kostnaderna nedan gäller ändå för passen i varje grupp.")
+        rader = []
+        for k in PT["kluster"]:
+            rader.append({
+                "Typ": kl_namn[k["id"]], "Pass": k["n"],
+                "Vanligast": ", ".join(f"{GRUPPNAMN.get(g, g)} ({n})" for g, n in k["topp"]),
+                "Längd (median, min)": round(k["median_min"]),
+                "Last (median)": None if k["median_last"] is None else round(k["median_last"]),
+                "HRV natten efter mot vilodygn": "–" if k["kostnad"] is None else
+                f"{fmt(k['kostnad'], 1, True, ' ms')} (± {fmt(1.96 * k['kostnad_se'], 1)})",
+                "Dygn med bara den typen": k["n_enkla"]})
+        st.dataframe(pd.DataFrame(rader), hide_index=True, width="stretch")
+        st.caption("Kostnaden är HRV natten efter passet minus 7-dygnssnittet, jämfört med samma sak efter vilodygn. "
+                   "Bara dygn med ett enda pass räknas, och sjukdygn är borttagna. ± är ett 95 %-intervall. "
+                   "Det här är en beskrivning, inte modellen: passtyperna skiljer sig också i längd och last.")
 
 # ------------------------------------------------------------------ tabell
 with tab_table:
