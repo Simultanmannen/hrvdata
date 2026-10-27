@@ -293,6 +293,29 @@ def ols(X, y):
     return b, se, int(len(y))
 
 
+def tillracklig(X, y, namn) -> dict:
+    """Tillräcklig statistik för den linjära modellen y ~ X: n, X'X, X'y, y'y (X med konstant först).
+
+    Med dem kan en linjär blandad modell över flera personer skattas exakt (slumpmässiga effekter
+    på alla koefficienter, egen restvarians per person) utan att några dygnsvärden lämnar datorn.
+    'std' är samma sak på standardiserade variabler: varje förklarande variabel centrerad och delad
+    med personens egen sd, utfallet likaså. Då blir koefficienterna jämförbara mellan klockor med
+    olika enheter (Garmin mot Oura). Kolumner utan spridning (t.ex. ingen styrka alls) får sd 0 och
+    står kvar som nollor; samla.py hanterar dem som saknad information för den personen."""
+    ok = np.isfinite(X).all(1) & np.isfinite(y)
+    X, y = X[ok], y[ok]
+    n = len(y)
+    mx, sx = X[:, 1:].mean(0), X[:, 1:].std(0, ddof=1)
+    my, sy = y.mean(), y.std(ddof=1)
+    Z = np.column_stack([np.ones(n), np.where(sx > 0, (X[:, 1:] - mx) / np.where(sx > 0, sx, 1), 0.0)])
+    zy = (y - my) / sy
+    stat = lambda A, v: {'XtX': (A.T @ A).tolist(), 'Xty': (A.T @ v).tolist(), 'yty': float(v @ v)}
+    return {'namn': ['konst'] + list(namn), 'n': int(n),
+            'ra': stat(X, y),
+            'std': {**stat(Z, zy), 'medel_x': mx.tolist(), 'sd_x': sx.tolist(),
+                    'medel_y': float(my), 'sd_y': float(sy)}}
+
+
 def acf(x, lag=1):
     x = np.asarray(x, float)
     x = x[np.isfinite(x)]
@@ -351,6 +374,7 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
     Xt = np.column_stack([np.ones(N)] + [K.d[k] for k in TOTAL] + [form])
     bt, set_, _ = ols(Xt, K.y)
     koef_total = {k: {'b': float(bt[i + 1]), 'se': float(set_[i + 1])} for i, k in enumerate(TOTAL + ['form'])}
+    suff = {'direkt': tillracklig(Xs, K.y, BASE + ['form']), 'total': tillracklig(Xt, K.y, TOTAL + ['form'])}
 
     tick('Nyckeltal', 0.9)
     ext = extra_nyckeltal(K, D, A, form, res, sjuk, start)
@@ -363,7 +387,7 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
                'utan_h7_form': K.r2(p_nh7f, m_nh7f)},
         'mae': {'bas': K.mae(p0, m0), 'form': K.mae(p_form, m_form)},
         'n_utv': int(m0.sum()),
-        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols,
+        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols, 'suff': suff,
         **ext,
     }
 

@@ -2,7 +2,13 @@
 
 Innehållet är det som behövs för att pröva hur allmängiltig dos–responsmodellen är:
 koefficienter med standardfel, prognosförmåga, den långsamma formens egenskaper och
-några modellfria mått. Användaren ser hela filen innan den sparas eller skickas."""
+några modellfria mått. Användaren ser hela filen innan den sparas eller skickas.
+
+Schema 2 (version 0.3.2): + 'tillracklig', summor och produktsummor (n, X'X, X'y, y'y) för båda
+modellvarianterna, i råa och standardiserade enheter. Räcker för en blandad modell över personer
+i samla.py. Inga datum finns med. Summorna avslöjar i regel inga enskilda dygn, undantaget är en
+variabel som bara är skild från noll ett enda dygn (t.ex. ett enda sjukdygn), där produktsumman
+blir det dygnets värde, fortfarande utan datum."""
 import json
 import math
 from datetime import date
@@ -12,7 +18,7 @@ import numpy as np
 import modell
 from version import VERSION
 
-SCHEMA = 1
+SCHEMA = 2
 
 
 def _r(x, n=4):
@@ -37,7 +43,7 @@ def bygg(R: dict, deltagare: str, bakgrund: dict | None = None, kalla: str | Non
         raise ValueError("Modellen har inte kunnat köras.")
     beskrivning = dict(R["beskrivning"])
     beskrivning["kalla"] = kalla or "garmin"   # garmin: EPOC-last + 0–100-stress. oura: min×intensitet + minuter hög stress
-    return _r({
+    b = _r({
         "schema": SCHEMA,
         "app_version": VERSION,
         "modellversion": modell.MODELLVERSION,
@@ -59,6 +65,9 @@ def bygg(R: dict, deltagare: str, bakgrund: dict | None = None, kalla: str | Non
         "lastklasser": R["lastklasser"],
         "nedvarvning": R["nedvarvning"],
     })
+    # Full precision: X'X avrundat till 4 decimaler kan ge en annan invers.
+    b["tillracklig"] = R["suff"]
+    return b
 
 
 def text(b: dict) -> str:

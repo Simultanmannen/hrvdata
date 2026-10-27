@@ -994,6 +994,10 @@ Det går bara att svara på med fler personers resultat.
 Du kan bidra med en liten fil med **bara sammanfattade resultat från din modell**. Den innehåller
 inga dygnsvärden, inga datum utom startmånaden, inga pass, inga platser och inget namn. Ett slumpat id
 skiljer dina bidrag från andras. Du ser hela filen nedan innan du sparar den, och det är du som skickar den.
+
+Sist i filen finns summor över alla dina dygn (hur många dygn, summor och produktsummor av modellens
+variabler). Med dem går det att räkna en gemensam modell för alla som bidragit utan att någons
+dygnsvärden behöver lämna datorn.
 """)
     if not R.get("ok"):
         st.info("Bidraget kan skapas när modellen har kunnat räknas. " + R.get("skal", ""))
