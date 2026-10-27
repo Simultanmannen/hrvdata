@@ -134,10 +134,31 @@ class Planerare:
         res = y - X @ b
         self.sigma = float(np.std(res, ddof=X.shape[1]))
         self.n_plan = n
+        self._lastkostnad(X, res, names)
         # Ingen extra nivåjustering mot de senaste nätternas miss: formen bär redan nivån.
         # Timme för pass: median av dagens sista start på passdagar (rows har 12.0 på vilodagar)
         hrs = [r["hour"] for r in rows if r["load"] > 0]
         self.timme = float(np.median(hrs)) if hrs else 17.0
+
+    def _lastkostnad(self, X, res, names):
+        """Punkt 7: vad ett pass kostar natt 1 (dagens last) och natt 2 (gårdagens last), och summan,
+        med osäkerhet. Summans standardfel tar hänsyn till att de två koefficienterna samvarierar.
+
+        Spärren slår till när ingen av de tre är skild från noll (alla |t| < 2). Då finns inget
+        underlag för att placera passen, och planeraren ska säga det i stället för att rekommendera.
+        Bara natt 1 räcker inte som test: hos en del (cc98ea91 i första omgången) är natt 1 noll men
+        natt 2 tydlig, och då är placeringen meningsfull."""
+        ok = np.isfinite(X).all(1)
+        Xo = X[ok]
+        s2 = float(res @ res / (len(res) - X.shape[1]))
+        V = s2 * np.linalg.pinv(Xo.T @ Xo)
+        i1, i2 = names.index("load"), names.index("pload")
+        b1, b2 = self.b["load"], self.b["pload"]
+        se1, se2 = float(np.sqrt(V[i1, i1])), float(np.sqrt(V[i2, i2]))
+        se_s = float(np.sqrt(V[i1, i1] + V[i2, i2] + 2 * V[i1, i2]))
+        rad = lambda b, se: {"b": b, "se": se, "t": b / se if se > 0 else 0.0}
+        self.lastkostnad = {"natt1": rad(b1, se1), "natt2": rad(b2, se2), "summa": rad(b1 + b2, se_s)}
+        self.sparr = all(abs(v["t"]) < 2 for v in self.lastkostnad.values())
 
     def _normalspann(self):
         natter = [(d, v["hrv_night"]) for d, v in self.D.items() if v["hrv_night"] is not None]
@@ -379,7 +400,10 @@ class Planerare:
                                  "hrv": float(Y[i, k]), "p_under": float(p[i, k])})
             return {"dagar": dagar_ut, "under": float(under[i]), "samsta": float(Y[i].min())}
 
-        return {"ok": True, "plan": plan(best), "samsta_upplagg": plan(worst),
+        # Spärr (punkt 7): ingen rangordning när lastkostnaden inte är skild från noll någon av nätterna.
+        # Veckan med vanligt mönster och veckan utan träning visas ändå, de bygger på stressen.
+        return {"ok": True, "sparr": self.sparr, "lastkostnad": self.lastkostnad, "stress_vantad": stress_vantad,
+                "plan": None if self.sparr else plan(best), "samsta_upplagg": None if self.sparr else plan(worst),
                 "vanlig_under": float(self.poang(Yv)[0][0]), "vanlig_hrv": Yv[0].tolist(),
                 "utan_traning_under": float(self.poang(Y0)[0][0]), "utan_traning_hrv": Y0[0].tolist(),
                 "n_kandidater": int(len(Lend)), "veckolast": veckolast, "dagar": dagar, "hard": hard,
@@ -424,6 +448,12 @@ if __name__ == "__main__":
     F = P.foreslag(start, niv)
     if not F["ok"]:
         sys.exit(F["skal"])
+    lk = P.lastkostnad
+    print("Lastkostnad per 100: " + ", ".join(f"{k} {v['b'] * 100:+.2f} ms (t {v['t']:+.1f})" for k, v in lk.items())
+          + f" | spärr: {'JA' if P.sparr else 'nej'}")
+    if F["sparr"]:
+        print("Underlaget för tunt: inget förslag. Vanligt mönster:", [round(x, 1) for x in F["vanlig_hrv"]])
+        sys.exit(0)
     print(f"\nVecka från {start} ({F['n_kandidater']} kandidater):")
     for d in F["plan"]["dagar"]:
         print(f"  {d['veckodag']} {d['datum']}  {d['stress']:6s} väntad {d['stress_vantad']:4.1f}  {d['roll']:11s} {d['last']:5.0f}"

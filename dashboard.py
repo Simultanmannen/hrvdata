@@ -814,8 +814,35 @@ with tab_plan:
         F = P.foreslag(start, nivaer, veckolast=float(veckolast), dagar=int(pdagar), hard=int(phard),
                        styrka=len(sdagar) if sdagar else int(pstyrka), las=las, styrkedagar=sdagar or None,
                        max_vila_i_rad=mvila)
+        lk = F.get("lastkostnad") if F["ok"] else None
         if not F["ok"]:
             st.warning(F["skal"])
+        elif F["sparr"]:
+            # Punkt 7: ingen rekommendation när träningens kostnad inte går att skilja från noll
+            st.warning(
+                "**Underlaget räcker inte för att placera passen.** I din data går det inte att skilja "
+                "träningens effekt på HRV från noll, varken natten efter passet "
+                f"({fmt(lk['natt1']['b'] * 100, 1, True, ' ms')} per 100 i last, t {fmt(lk['natt1']['t'], 1, True)}), "
+                f"natten därpå ({fmt(lk['natt2']['b'] * 100, 1, True, ' ms')}, t {fmt(lk['natt2']['t'], 1, True)}) "
+                f"eller de två tillsammans (t {fmt(lk['summa']['t'], 1, True)}). Då blir varje placering lika bra "
+                "enligt modellen, och ett förslag skulle se säkrare ut än det är. Träna som du brukar. Det som "
+                "syns nedan är vad veckans stress väntas göra med dina nätter.")
+            labels = [f"{planering.VECKODAGAR[(pd.Timestamp(start) + pd.Timedelta(days=i)).weekday()]} "
+                      f"{(pd.Timestamp(start) + pd.Timedelta(days=i)).day}/{(pd.Timestamp(start) + pd.Timedelta(days=i)).month}"
+                      for i in range(7)]
+            fig = go.Figure()
+            band = 0.674 * F["sigma"]
+            fig.add_bar(x=labels, y=F["vanlig_hrv"], name="Ditt vanliga mönster",
+                        marker_color=[STRESSFARG[s] for s in nivaer],
+                        error_y=dict(type="constant", value=band, color=INK2, thickness=1),
+                        hovertemplate="%{y:.0f} ms<extra></extra>")
+            fig.add_hline(y=F["grans"], line_dash="dash", line_color=C_NEG,
+                          annotation_text="normalspannets undre gräns", annotation_position="bottom right")
+            style(fig, 300, title="Förväntad HRV natten efter varje dag, med ditt vanliga mönster (ms)",
+                  hovermode="closest")
+            st.plotly_chart(fig, width="stretch")
+            st.caption(f"Förväntat antal nätter under spannet: {fmt(F['vanlig_under'], 1)}. Staplarnas färg visar "
+                       "dagens övriga stress (grön lugn, grå normal, röd tung).")
         else:
             pl = F["plan"]
             c = st.columns(4)
@@ -886,6 +913,12 @@ formen (korrelation högst 0,09). Eftersläpningen sitter i stressen, inte i HRV
 där båda dras av. Veckans *medel* blir detsamma hur passen än läggs, men antalet nätter under spannet
 gör det inte. Planeraren prövar alla sätt att lägga veckans pass ({F.get('n_kandidater', 0)} upplägg)
 och väljer det med lägst förväntat antal nätter under spannet.
+
+**Vad ett pass kostar hos dig**, per 100 i last: natten efter {fmt(P.lastkostnad['natt1']['b'] * 100, 1, True, ' ms')}
+(t {fmt(P.lastkostnad['natt1']['t'], 1, True)}), natten därpå {fmt(P.lastkostnad['natt2']['b'] * 100, 1, True, ' ms')}
+(t {fmt(P.lastkostnad['natt2']['t'], 1, True)}), tillsammans {fmt(P.lastkostnad['summa']['b'] * 100, 1, True, ' ms')}
+(t {fmt(P.lastkostnad['summa']['t'], 1, True)}). Båda nätterna ingår i prognosen. Är ingen av dem skild från noll
+(alla t mellan −2 och +2) ger planeraren inget förslag, eftersom alla placeringar då är lika bra.
 
 **Normalspannet** är snittet av dina senaste 60 nätter ({fmt(P.bas, 0)} ms) minus en halv
 standardavvikelse ({fmt(P.grans, 0)} ms). Modellens osäkerhet per natt är ±{fmt(P.sigma, 0)} ms
