@@ -68,6 +68,8 @@ def bygg(R: dict, deltagare: str, bakgrund: dict | None = None, kalla: str | Non
         "lang_last": R.get("lang_last"),
         # 0.3.6: sömnvariant (sjukindex residualiserat mot sömn, föregående natts sömn som prediktor)
         "somn": R.get("somn"),
+        # 0.3.7: minuter oavsett puls (alla uthållighetsminuter, och lågintensiva minuter)
+        "minuter": R.get("minuter"),
     })
     # Full precision: X'X avrundat till 4 decimaler kan ge en annan invers.
     b["tillracklig"] = R["suff"]

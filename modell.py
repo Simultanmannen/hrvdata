@@ -165,9 +165,12 @@ def fys_ep(idx, thr=2., minlen=2, tail=1, gap=3) -> set:
 
 
 # ----------------------------------------------------------------- modellrader (bygg_rows2.py)
+LAGINT = 0.3   # last per minut under detta = lågintensivt pass (vandring, fridykning, yoga). Medianpasset ~2,0.
+
+
 def day_feats(A, d):
     acts = A.get(d, [])
-    f = dict(ate=0., ante=0., load=0., smin=0., emin=0., hour=np.nan, n=len(acts))
+    f = dict(ate=0., ante=0., load=0., smin=0., emin=0., lmin=0., hour=np.nan, n=len(acts))
     for g in GRUPPER:
         f['L_' + g] = 0.
         f['M_' + g] = 0.
@@ -178,6 +181,9 @@ def day_feats(A, d):
     f['load'] = sum((a['load'] or 0) for a in acts)
     f['smin'] = sum((a['dur'] or 0) / 60 for a in acts if a['type'] in STR)
     f['emin'] = sum((a['dur'] or 0) / 60 for a in acts if a['type'] not in STR)
+    # Minuter i pass som klockan knappt ger last (punkt 6). Pass utan längd kan inte bedömas och räknas inte.
+    f['lmin'] = sum(a['dur'] / 60 for a in acts if a['type'] not in STR and a['dur']
+                    and (a['load'] or 0) / (a['dur'] / 60) < LAGINT)
     for a in acts:
         g = grupp(a['type'])
         f['L_' + g] += (a['load'] or 0)
@@ -213,7 +219,7 @@ def bygg_rader(D, A, start: str, sjuk: set) -> list[dict]:
         r = dict(
             date=d, ord=o, y=float(y),
             h7=float(h7), stress=float(s),
-            ate=f['ate'], ante=f['ante'], load=f['load'], smin=f['smin'], emin=f['emin'],
+            ate=f['ate'], ante=f['ante'], load=f['load'], smin=f['smin'], emin=f['emin'], lmin=f['lmin'],
             hour=f['hour'] if f['hour'] == f['hour'] else 12.0,
             nact=f['n'], pate=fp['ate'], pload=fp['load'],
             pstress=float(ps) if ps is not None and ps >= 0 else float(s),
@@ -528,6 +534,36 @@ def somn_variant(K, D, A, form, start) -> dict:
     }
 
 
+# ----------------------------------------------------------------- minuter oavsett puls (punkt 6)
+def minut_variant(K, form) -> dict:
+    """Punkt 6, som variant vid sidan av basmodellen: pass som klockan ger nästan ingen last
+    (fridykning, vandring, yoga) men som ändå kan kosta. Två egna termer prövas var för sig:
+      - emin: alla uthållighetsminuter samma dag, oavsett puls
+      - lmin: minuter i lågintensiva pass (last per minut < LAGINT)
+    Utöver basmodellen och utöver basmodellen med form, ut ur stickprovet på samma dygn."""
+    y, N, t0 = K.y, K.N, K.t0
+    Xb = K.design(BASE, np.arange(N))
+
+    def r2(M):
+        p, m = expanding_snabb(M, y, t0)
+        return K.r2(p, m)
+
+    emin, lmin = K.d['emin'], K.d['lmin']
+    r = {"bas": r2(Xb), "form": r2(np.column_stack([Xb, form]))}
+    ut = {"r2": r, "andel_lagint_min": float(lmin.sum() / emin.sum()) if emin.sum() > 0 else None,
+          "dygn_med_lagint": int((lmin > 0).sum()), "lagint_grans": LAGINT}
+    for namn, v in (("emin", emin), ("lmin", lmin)):
+        if (v > 0).sum() < 15:
+            ut[namn] = None
+            continue
+        r[f"bas_{namn}"] = r2(np.column_stack([Xb, v]))
+        r[f"form_{namn}"] = r2(np.column_stack([Xb, form, v]))
+        b, se, _ = ols(np.column_stack([Xb, form, v]), y)
+        ut[namn] = {"per_timme": {"b": float(b[-1]) * 60, "se": float(se[-1]) * 60},
+                    "vinst_mot_bas": r[f"bas_{namn}"] - r["bas"], "vinst_mot_form": r[f"form_{namn}"] - r["form"]}
+    return ut
+
+
 # ----------------------------------------------------------------- hela körningen
 def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None,
         progress=None) -> dict:
@@ -583,6 +619,7 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
     ll = lang_last(K, A, form)
     tick('Sömn', 0.88)
     sv = somn_variant(K, D, A, form, start)
+    mv = minut_variant(K, form)
     tick('Nyckeltal', 0.9)
     ext = extra_nyckeltal(K, D, A, form, res, sjuk, start)
     tick('Klart', 1.0)
@@ -594,7 +631,7 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
                'utan_h7_form': K.r2(p_nh7f, m_nh7f)},
         'mae': {'bas': K.mae(p0, m0), 'form': K.mae(p_form, m_form)},
         'n_utv': int(m0.sum()),
-        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols, 'suff': suff, 'lang_last': ll, 'somn': sv,
+        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols, 'suff': suff, 'lang_last': ll, 'somn': sv, 'minuter': mv,
         **ext,
     }
 
@@ -722,6 +759,14 @@ if __name__ == '__main__':
     print(f"  vinst mot form {S['vinst_mot_form']:+.4f}, utan h7 {S['vinst_utan_h7']:+.4f} | sömn {kt(S['somn_per_h'], 'ms/h')}, "
           f"vaken {kt(S['vaken_per_10min'], 'ms/10 min')} | sjukflagga {S['andel_sjuk1']:.1%} → "
           f"{S['andel_sjuk2']:.1%}, kvar {S['sjuk1_kvar_i_sjuk2']:.0%} | pass utan last {S['pass_utan_last_dygn']} dygn")
+    M = R['minuter']
+    for k, lab in (("emin", "alla uthållighetsminuter"), ("lmin", "lågintensiva minuter")):
+        v = M[k]
+        print(f"minutvariant {lab}: " + ("för få dygn" if not v else
+              f"{v['per_timme']['b']:+.2f} ms/h (t {v['per_timme']['b'] / v['per_timme']['se']:+.1f}), "
+              f"vinst mot bas {v['vinst_mot_bas']:+.4f}, mot form {v['vinst_mot_form']:+.4f}"))
+    if M['andel_lagint_min'] is not None:
+        print(f"  lågintensivt: {M['andel_lagint_min']:.1%} av uthållighetsminuterna, {M['dygn_med_lagint']} dygn")
     if tr:
         print(f"  tröskel {tr['knut']}: {tr['r2_med_form']:.4f} ({tr['vinst_mot_form']:+.4f} mot form)  extra lutning över "
               f"{tr['over_knut_extra']['b']:+.4f} (t {tr['over_knut_extra']['b'] / tr['over_knut_extra']['se']:+.1f}), n över {tr['n_over']}")
