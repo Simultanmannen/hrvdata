@@ -31,9 +31,13 @@ if [ ! -x "$UV" ]; then
     [ -x "$UV" ] || fail "$NAT"
 fi
 
-"$UV" python install 3.12 --quiet || fail "$NAT"
-PY="$("$UV" python find 3.12)" || fail "$NAT"
-[ -n "$PY" ] || fail "$NAT"
+# Låst Python-version, samma som i Starta HRV-data.bat (se kommentaren där).
+PYVER=3.12.15
+PYFEL="Python kunde inte startas. Ta en skärmbild av det här fönstret och skicka till den som gav dig appen."
+"$UV" python install "$PYVER" --quiet || fail "$PYFEL"
+PY="$("$UV" python find "$PYVER")" || fail "$PYFEL"
+[ -n "$PY" ] || fail "$PYFEL"
+"$PY" -c "pass" >/dev/null 2>&1 || fail "$PYFEL"
 
 # Installera paket om de saknas eller om appen har uppdaterats
 if ! cmp -s requirements-lock.txt "$TOOLS/installerat.txt"; then
