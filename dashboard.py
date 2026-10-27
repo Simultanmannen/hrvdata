@@ -667,7 +667,9 @@ with tab_dos:
                     help="Samma sak, men när dagens stress hålls konstant. Skillnaden mot den totala effekten är "
                          "den del av passets kostnad som syns som höjd stress under dagen.")
         c[2].metric("En stressenhet över ditt vanliga", fmt(R["koef"]["stress"]["b"], 2, True, " ms"),
-                    help="Garmins dagsstress. 5 enheter över en normal dag är ungefär 5 gånger så mycket.")
+                    help="Garmins dagsstress. 5 enheter över en normal dag är ungefär 5 gånger så mycket. Talet är en "
+                         "prognos från dagsmedlet, som också räknar stressen under sömnen fram till uppvaknandet. En "
+                         "del av det är alltså föregående natts tillstånd, inte bara dagens belastning.")
         if tp:
             n2 = "" if tp["natt2"] is None else f" Natten därpå: {fmt(tp['natt2'], 1, True, ' ms')}."
             c[3].metric(f"Tungt pass (last ≥ {tp['grans_last']:.0f})", fmt(tp["natt1"], 1, True, " ms"),
@@ -935,7 +937,9 @@ with tab_form:
 # ------------------------------------------------------------------ hälsa
 with tab_health:
     pairs = [("rhr", "Vilopuls (slag/min)", SERIES[7], ""), ("sömn_h", "Sömn (timmar)", SERIES[6], " h"),
-             ("stress_avg", "Stress, dagssnitt", SERIES[1], ""), ("skin_temp_dev_c", "Hudtemperatur, avvikelse (°C)",
+             ("stress_avg", "Stress, dagssnitt", SERIES[1], ""),
+             ("stress_vaken", "Stress under vaken tid (utan sömn och pass)", SERIES[4], ""),
+             ("skin_temp_dev_c", "Hudtemperatur, avvikelse (°C)",
                                                                   SERIES[3], " °C"),
              ("respiration_avg", "Andning i sömn (andetag/min)", SERIES[2], ""), ("steps", "Steg per dag", SERIES[0], "")]
     pairs = [p for p in pairs if days[p[0]].notna().any()]
@@ -973,7 +977,7 @@ with tab_train:
 # ------------------------------------------------------------------ tabell
 with tab_table:
     t = days[["datum", "hrv_night", "hrv_7d", "rhr", "sömn_h", "sleep_score", "stress_avg",
-              "skin_temp_dev_c", "steps"]].copy()
+              "skin_temp_dev_c", "steps"] + (["stress_vaken"] if days["stress_vaken"].notna().any() else [])].copy()
     dl = acts.groupby("date").agg(last=("training_load", "sum"), minuter=("min", "sum"))
     t["date"] = t["datum"].dt.strftime("%Y-%m-%d")
     t = t.merge(dl, left_on="date", right_index=True, how="left").drop(columns="date")
@@ -983,6 +987,7 @@ with tab_table:
     t["datum"] = t["datum"].dt.strftime("%Y-%m-%d")
     t = t.rename(columns={"datum": "Datum", "hrv_night": "HRV natt", "hrv_7d": "HRV 7d", "rhr": "Vilopuls",
                           "sömn_h": "Sömn h", "sleep_score": "Sömnpoäng", "stress_avg": "Stress",
+                          "stress_vaken": "Stress vaken",
                           "skin_temp_dev_c": "Hudtemp", "steps": "Steg", "last": "Last", "minuter": "Träning min",
                           "form": "Form", "pred": "Förväntad HRV"})
     st.caption("HRV, vilopuls och sömn gäller natten MOT datumet. Last, stress och steg gäller dygnet. "

@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS days (
     rem_seconds      REAL,
     awake_seconds    REAL,
     steps            REAL,
-    fetched_at       TEXT      -- när dygnet hämtades ('demo' för exempeldata)
+    fetched_at       TEXT,     -- när dygnet hämtades ('demo' för exempeldata)
+    stress_vaken     REAL,     -- medel av 3-minutersstressen från uppvaknande till insomnande (Garmin)
+    stress_vaken_min REAL      -- antal mätbara minuter i det fönstret
 );
 
 CREATE TABLE IF NOT EXISTS activities (
@@ -48,7 +50,9 @@ CREATE TABLE IF NOT EXISTS meta (
 """
 DAY_COLS = ["date", "hrv_night", "hrv_7d", "hrv_status", "rhr", "respiration_avg", "skin_temp_dev_c",
             "stress_avg", "sleep_seconds", "sleep_score", "deep_seconds", "rem_seconds",
-            "awake_seconds", "steps", "fetched_at"]
+            "awake_seconds", "steps", "fetched_at", "stress_vaken", "stress_vaken_min"]
+# Kolumner som tillkommit efter första versionen. Läggs till i befintliga databaser vid start.
+NYA_DAY_COLS = {"stress_vaken": "REAL", "stress_vaken_min": "REAL"}
 ACT_COLS = ["activity_id", "date", "type_key", "name", "start_local", "duration_s", "distance_m",
             "avg_hr", "max_hr", "aerobic_te", "anaerobic_te", "training_load", "calories"]
 
@@ -59,6 +63,11 @@ def connect(path=DB_PATH) -> sqlite3.Connection:
     con = sqlite3.connect(path, timeout=30, check_same_thread=False)
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(SCHEMA)
+    har = {r[1] for r in con.execute("PRAGMA table_info(days)")}
+    for col, typ in NYA_DAY_COLS.items():
+        if col not in har:
+            con.execute(f"ALTER TABLE days ADD COLUMN {col} {typ}")
+    con.commit()
     return con
 
 

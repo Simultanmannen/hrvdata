@@ -10,7 +10,8 @@ import db
 import oura
 import sync
 
-PHASES = {"list": "Listar pass", "days": "Hämtar dygnsvärden (HRV, sömn, stress)"}
+PHASES = {"list": "Listar pass", "days": "Hämtar dygnsvärden (HRV, sömn, stress)",
+          "stress": "Kompletterar stressen under dagen för de senaste månaderna"}
 
 
 def source() -> str:

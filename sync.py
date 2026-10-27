@@ -12,7 +12,7 @@ import getpass
 import json
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import db
 from config import JSON_DIR, TOKEN_DIR, ensure_dirs
@@ -186,6 +186,68 @@ def day_row(d: str, raw: dict, fetched_at: str) -> dict:
     }
 
 
+MIN_VAKNA_VARDEN = 40   # under 2 timmar mätbar vaken tid räcker inte för ett dygnsmått
+STRESS_DAGAR = 140      # Garmin servar 3-minutersstressen ungefär 4,5 månader bakåt. Klara dygn inom det
+                        # fönstret som saknar den kompletteras, annars försvinner den för gott.
+
+
+def _gmt_ms(s: str | None) -> float | None:
+    """'2026-09-29T22:00:00.0' (GMT) → epoch-millisekunder."""
+    if not s:
+        return None
+    return datetime.fromisoformat(s[:19]).replace(tzinfo=timezone.utc).timestamp() * 1000
+
+
+def vaket_stress(stress: dict | None, somn: dict | None, nasta_somn: dict | None):
+    """Garmins 3-minutersstress under vaken tid dygn d. Returnerar (medel, mätbara minuter) eller (None, None).
+
+    Fönstret går från uppvaknandet (sömnposten för dygn d, natten som slutade på morgonen) till
+    insomnandet (sömnposten för dygn d+1, som börjar kvällen d), avkortat vid midnatt eftersom
+    stressarrayen bara täcker kalenderdygnet. Saknas nästa natts insomning blir det inget värde:
+    att räkna till midnatt skulle ta med kvällens sömn och dra ner medlet. Dagens dygn får alltså
+    sitt värde först när morgondagens sömn hämtats.
+    Värden < 0 tas bort (−1 = för lite data, −2 = aktivitet), så passen ingår inte.
+
+    Dagsmedlet (averageStressLevel) räknas däremot över hela kalenderdygnet inklusive sömnen.
+    Det här måttet skiljer jobb- och livsstress från nattens nivå."""
+    if not stress or not somn:
+        return None, None
+    arr = stress.get("stressValuesArray") or []
+    vaken = somn.get("sleepEndTimestampGMT")
+    if not arr or vaken is None:
+        return None, None
+    slut = _gmt_ms(stress.get("endTimestampGMT")) or (arr[-1][0] + 180_000)
+    insomning = (nasta_somn or {}).get("sleepStartTimestampGMT")
+    if insomning is None or insomning <= vaken:
+        return None, None
+    slut = min(slut, insomning)
+    v = [x for t, x in arr if t is not None and x is not None and vaken <= t < slut and x >= 0]
+    if len(v) < MIN_VAKNA_VARDEN:
+        return None, None
+    return sum(v) / len(v), 3.0 * len(v)
+
+
+def _las_json(p):
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def uppdatera_vaken(con, d: str, mapp=None) -> bool:
+    """Räkna om stress_vaken för dygn d ur de sparade JSON-filerna för d och d+1."""
+    mapp = mapp or JSON_DIR
+    raw = _las_json(mapp / f"{d}.json")
+    if not raw or not raw.get("stress") or not dig(raw, "sleep", "dailySleepDTO"):
+        return False  # filen saknar underlag: rör inte ett värde som räknats ur en annan källa
+    nxt = _las_json(mapp / f"{(date.fromisoformat(d) + timedelta(days=1)).isoformat()}.json") or {}
+    medel, minuter = vaket_stress(raw.get("stress"), dig(raw, "sleep", "dailySleepDTO"),
+                                  dig(nxt, "sleep", "dailySleepDTO"))
+    with con:
+        cur = con.execute("UPDATE days SET stress_vaken=?, stress_vaken_min=? WHERE date=?", (medel, minuter, d))
+    return cur.rowcount > 0 and medel is not None
+
+
 def complete(d: str, fetched_at: str | None) -> bool:
     """Garmin fyller på sömn, HRV och stress i efterhand. Ett dygn räknas som klart först om
     det hämtades minst två dygn efter att det tog slut."""
@@ -209,7 +271,7 @@ def sync_days(api, con, days_back: int, progress=None) -> int:
         else:
             raw = {}
             for key, fn in (("summary", api.get_user_summary), ("sleep", api.get_sleep_data),
-                            ("hrv", api.get_hrv_data)):
+                            ("hrv", api.get_hrv_data), ("stress", api.get_stress_data)):
                 try:
                     raw[key] = _with_retry(fn, d)
                 except Exception as e:
@@ -221,6 +283,10 @@ def sync_days(api, con, days_back: int, progress=None) -> int:
             (JSON_DIR / f"{d}.json").write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
             row = day_row(d, raw, now)
             db.save_day(con, row)
+            # Vaken stress för d behöver insomnandet ur d+1, och d−1 får sitt insomnande ur d.
+            # Hämtningen går bakåt i tiden, så d+1 ligger redan på disk när d hämtas.
+            uppdatera_vaken(con, d)
+            uppdatera_vaken(con, (date.fromisoformat(d) - timedelta(days=1)).isoformat())
             har_hrv = row["hrv_night"] is not None
             fetched += 1
         utan_hrv = 0 if har_hrv else utan_hrv + 1
@@ -228,7 +294,48 @@ def sync_days(api, con, days_back: int, progress=None) -> int:
             log(f"Ingen HRV på {UTAN_HRV_STOPP} dygn i rad före {d} – klockan mätte inte HRV längre bak. Stannar.")
             break
     log(f"{fetched} dygn hämtade.")
+    extra = komplettera_stress_fonster(api, con, progress)
+    if extra:
+        log(f"Stress under dagen kompletterad för {extra} äldre dygn.")
     return fetched
+
+
+def komplettera_stress_fonster(api, con, progress=None) -> int:
+    """Gå igenom de senaste STRESS_DAGAR dygnen oavsett hur långt den vanliga hämtningen gick.
+    Behövs första gången efter uppdateringen: äldre dygn räknas som klara och hämtas inte om."""
+    status = db.day_status(con)
+    today = date.today()
+    n = 0
+    for i in range(STRESS_DAGAR):
+        d = (today - timedelta(days=i)).isoformat()
+        if progress:
+            progress("stress", i + 1, STRESS_DAGAR)
+        if d in status and status[d][0] != "demo":
+            n += komplettera_stress(api, con, d)
+    return n
+
+
+def komplettera_stress(api, con, d: str) -> int:
+    """Ett klart dygn som saknar 3-minutersstressen (hämtat med en äldre version, eller inläst ur en
+    garmin.db utan JSON) får den, och sömnposten om den också saknas. Returnerar 1 om något hämtades."""
+    p = JSON_DIR / f"{d}.json"
+    raw = _las_json(p) or {}
+    saknas = [k for k in ("sleep", "stress") if k not in raw]
+    if not saknas:
+        return 0
+    for key in saknas:
+        fn = api.get_sleep_data if key == "sleep" else api.get_stress_data
+        try:
+            raw[key] = _with_retry(fn, d)
+        except Exception as e:
+            if "TooManyRequests" in type(e).__name__ or "Connection" in type(e).__name__:
+                raise
+            raw[key] = None
+        time.sleep(PAUSE_S)
+    p.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    uppdatera_vaken(con, d)
+    uppdatera_vaken(con, (date.fromisoformat(d) - timedelta(days=1)).isoformat())
+    return 1
 
 
 def remove_demo(con) -> None:
@@ -246,6 +353,9 @@ def main(argv=None):
     p.add_argument("--days", type=int, default=30, help="Antal dygn bakåt (default 30)")
     p.add_argument("--full", action="store_true", help="Gå igenom hela passlistan")
     sub.add_parser("demo", help="Skapa påhittad exempeldata")
+    p = sub.add_parser("vaken", help="Räkna om stressen under vaken tid ur sparade JSON-filer")
+    p.add_argument("--mapp", help="Mapp med dygnsfiler (default data/json). Filerna ska ha nycklarna "
+                                  "'sleep' och 'stress' i garminconnect-format.")
     args = ap.parse_args(argv)
 
     ensure_dirs()
@@ -258,6 +368,12 @@ def main(argv=None):
         since = (date.today() - timedelta(days=args.days)).isoformat()
         sync_activities(api, con, since, args.full)
         sync_days(api, con, args.days)
+    elif args.cmd == "vaken":
+        from pathlib import Path
+        mapp = Path(args.mapp) if args.mapp else JSON_DIR
+        filer = sorted(p for p in mapp.glob("????-??-??.json"))
+        n = sum(uppdatera_vaken(con, p.stem, mapp) for p in filer)
+        log(f"Stress under vaken tid räknad för {n} av {len(filer)} dygn i {mapp}.")
     elif args.cmd == "demo":
         import demo_data
         demo_data.create(con)

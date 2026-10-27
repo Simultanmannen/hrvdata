@@ -18,6 +18,7 @@ referens.json
 prov/*
 !prov/prov_oura_mock.py
 !prov/prov_dashboard_oura.py
+!prov/prov_vaken.py
 
 # Interna anteckningar
 CLAUDE.md
