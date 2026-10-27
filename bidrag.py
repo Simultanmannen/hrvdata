@@ -66,6 +66,8 @@ def bygg(R: dict, deltagare: str, bakgrund: dict | None = None, kalla: str | Non
         "nedvarvning": R["nedvarvning"],
         # 0.3.6: lång lastlagg (Banister fitness/trötthet, tröskel i dagslasten) mot basmodellen och formen
         "lang_last": R.get("lang_last"),
+        # 0.3.6: sömnvariant (sjukindex residualiserat mot sömn, föregående natts sömn som prediktor)
+        "somn": R.get("somn"),
     })
     # Full precision: X'X avrundat till 4 decimaler kan ge en annan invers.
     b["tillracklig"] = R["suff"]

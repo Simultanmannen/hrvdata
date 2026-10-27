@@ -78,9 +78,14 @@ def forsta_hrv(D) -> str | None:
 
 
 # ----------------------------------------------------------------- sjukindex (sjuk_ren.py)
-def sjukindex(D, A, start: str) -> dict:
+def sjukindex(D, A, start: str, somn: bool = False) -> dict:
     """Renskuret fysiologiskt sjukindex: robust z av vilopuls- och andningsavvikelse mot
-    60 dygns median bakåt, residualiserat mot aktivitetsminuter och last (idag + igår)."""
+    60 dygns median bakåt, residualiserat mot aktivitetsminuter och last (idag + igår).
+
+    somn=True (variant 2, punkt 5): residualiseras även mot nattens sömnlängd (natten som slutar på
+    morgonen, samma natt som vilopulsen) och mot en indikator för pass utan last (t.ex. fridykning,
+    andningsövningar), så att en störd natt (barn, sen kväll) eller en träningsdag utan last inte tas
+    för sjukdom. Basmodellen använder somn=False."""
     dts = sorted(D)
 
     def trailing(key, win=60, minn=15):
@@ -131,6 +136,11 @@ def sjukindex(D, A, start: str) -> dict:
     L = np.column_stack([np.ones(len(dd)),
                          [mins.get(d, 0.) for d in dd], [mins.get(prv(d), 0.) for d in dd],
                          [load.get(d, 0.) for d in dd], [load.get(prv(d), 0.) for d in dd]])
+    if somn:
+        sl = np.array([D[d]['sleep_seconds'] / 3600 if D[d]['sleep_seconds'] else np.nan for d in dd])
+        sl = np.where(np.isfinite(sl), sl, np.nanmedian(sl) if np.isfinite(sl).any() else 7.5)
+        utan_last = [1.0 if (d in A and load.get(d, 0.) == 0) else 0.0 for d in dd]
+        L = np.column_stack([L, sl, utan_last])
     bb, *_ = np.linalg.lstsq(L, ix, rcond=None)
     ren = dict(sidx)
     for d, v in zip(dd, ix - L @ bb):
@@ -208,6 +218,9 @@ def bygg_rader(D, A, start: str, sjuk: set) -> list[dict]:
             nact=f['n'], pate=fp['ate'], pload=fp['load'],
             pstress=float(ps) if ps is not None and ps >= 0 else float(s),
             sjuk=1.0 if (d in sjuk or n1 in sjuk) else 0.0,
+            # Natten som slutade på morgonen dygn d: känd före utfallsnatten. Används bara i sömnvarianten.
+            somn_h=D[d]['sleep_seconds'] / 3600 if D[d]['sleep_seconds'] else np.nan,
+            vaken_min=D[d]['awake_seconds'] / 60 if D[d]['awake_seconds'] is not None else np.nan,
         )
         for g in GRUPPER:
             r['L_' + g] = f['L_' + g]
@@ -439,6 +452,82 @@ def lang_last(K, A, form) -> dict:
     return {"r2_bas": r2_bas, "r2_form": r2_form, "banister": banister, "troskel": troskel}
 
 
+# ----------------------------------------------------------------- sömn (punkt 5)
+def somn_variant(K, D, A, form, start) -> dict:
+    """Punkt 5, som variant vid sidan av basmodellen (som inte ändras):
+      - sjukindex 2: residualiserat även mot nattens sömnlängd och pass utan last
+      - föregående natts sömnlängd (h) och vakna minuter som prediktorer (natten som slutade på
+        morgonen dygn d, känd före utfallsnatten)
+    Allt jämförs ut ur stickprovet på samma dygn. Saknad sömn ersätts med medianen från de första
+    T0 dygnen, så att ingen framtid läcker in och alla varianter utvärderas på samma rader."""
+    y, N, t0 = K.y, K.N, K.t0
+    sidx2 = sjukindex(D, A, start, somn=True)
+    s2set = fys_ep(sidx2) if sidx2 else set()
+    sjuk2 = np.array([1.0 if (d in s2set or iso(int(o) + 1) in s2set) else 0.0
+                      for d, o in zip(K.dates, K.o)])
+    j_sjuk = BASE.index('sjuk') + 1
+
+    def fyll(v):
+        """Ersätt saknade med medianen ur de första T0 dygnen. Saknas variabeln (nästan) helt: None,
+        och den lämnas utanför (en kolumn med bara samma värde går inte att skatta)."""
+        andel = float(np.mean(~np.isfinite(v)))
+        if np.isfinite(v).sum() < 30:
+            return None, andel
+        bas = v[:t0][np.isfinite(v[:t0])]
+        med = float(np.median(bas)) if len(bas) else float(np.nanmedian(v))
+        return np.where(np.isfinite(v), v, med), andel
+    somn, saknas_somn = fyll(K.d['somn_h'])
+    vaken, saknas_vaken = fyll(K.d['vaken_min'])
+    sovn = tuple(x for x in (somn, vaken) if x is not None)
+
+    def X(keys, sjukkol=None, extra=()):
+        M = K.design(keys, np.arange(N))
+        if sjukkol is not None and 'sjuk' in keys:
+            M = M.copy()
+            M[:, keys.index('sjuk') + 1] = sjukkol
+        return np.column_stack([M, *extra]) if extra else M
+
+    def r2(M):
+        p, m = expanding_snabb(M, y, t0)
+        return K.r2(p, m)
+
+    utan_h7 = [k for k in BASE if k != 'h7']
+    r = {
+        "bas": r2(X(BASE)),
+        "bas_sjuk2": r2(X(BASE, sjuk2)),
+        "bas_somn": r2(X(BASE, None, sovn)),
+        "bas_sjuk2_somn": r2(X(BASE, sjuk2, sovn)),
+        "form": r2(X(BASE, None, (form,))),
+        "form_sjuk2_somn": r2(X(BASE, sjuk2, (form, *sovn))),
+        "utan_h7": r2(X(utan_h7)),
+        "utan_h7_sjuk2_somn": r2(X(utan_h7, sjuk2, sovn)),
+    }
+    b, se, _ = ols(X(BASE, sjuk2, (form, *sovn)), y)
+    koef = {}
+    j = len(b) - len(sovn)
+    for namn, v, skala in (("somn_per_h", somn, 1), ("vaken_per_10min", vaken, 10)):
+        if v is None:
+            koef[namn] = None
+        else:
+            koef[namn] = {"b": float(b[j]) * skala, "se": float(se[j]) * skala}
+            j += 1
+    sjuk1 = K.d['sjuk']
+    return {
+        "r2": r,
+        "vinst_mot_form": r["form_sjuk2_somn"] - r["form"],
+        "vinst_utan_h7": r["utan_h7_sjuk2_somn"] - r["utan_h7"],
+        **koef,
+        "sjuk2": {"b": float(b[j_sjuk]), "se": float(se[j_sjuk])},
+        "andel_sjuk1": float(sjuk1.mean()), "andel_sjuk2": float(sjuk2.mean()),
+        "sjuk1_kvar_i_sjuk2": float((sjuk2[sjuk1 == 1] == 1).mean()) if sjuk1.any() else None,
+        "saknas_somn": saknas_somn, "saknas_vaken": saknas_vaken,
+        "pass_utan_last_dygn": int(sum(1 for d in K.dates if d in A and
+                                      sum((a['load'] or 0) for a in A[d]) == 0)),
+        "somn_median_h": float(np.median(somn)) if somn is not None else None,
+        "vaken_median_min": float(np.median(vaken)) if vaken is not None else None,
+    }
+
+
 # ----------------------------------------------------------------- hela körningen
 def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None,
         progress=None) -> dict:
@@ -492,6 +581,8 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
 
     tick('Lång lastlagg', 0.85)
     ll = lang_last(K, A, form)
+    tick('Sömn', 0.88)
+    sv = somn_variant(K, D, A, form, start)
     tick('Nyckeltal', 0.9)
     ext = extra_nyckeltal(K, D, A, form, res, sjuk, start)
     tick('Klart', 1.0)
@@ -503,7 +594,7 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
                'utan_h7_form': K.r2(p_nh7f, m_nh7f)},
         'mae': {'bas': K.mae(p0, m0), 'form': K.mae(p_form, m_form)},
         'n_utv': int(m0.sum()),
-        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols, 'suff': suff, 'lang_last': ll,
+        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols, 'suff': suff, 'lang_last': ll, 'somn': sv,
         **ext,
     }
 
@@ -625,6 +716,12 @@ if __name__ == '__main__':
           f"{bn['trotthet_hl']} d: {bn['r2']:.4f} ({bn['vinst_mot_bas']:+.4f} mot bas), med form {bn['r2_med_form']:.4f} "
           f"({bn['vinst_mot_form']:+.4f} mot form)  fitness {bn['fitness']['b']:+.4f} (t {bn['fitness']['b'] / bn['fitness']['se']:+.1f})  "
           f"trötthet {bn['trotthet']['b']:+.4f} (t {bn['trotthet']['b'] / bn['trotthet']['se']:+.1f})")
+    S = R['somn']
+    print(f"sömnvariant: R² {', '.join(f'{k} {v:.4f}' for k, v in S['r2'].items())}")
+    kt = lambda k, e: "saknas" if not k else f"{k['b']:+.2f} {e} (t {k['b'] / k['se']:+.1f})"
+    print(f"  vinst mot form {S['vinst_mot_form']:+.4f}, utan h7 {S['vinst_utan_h7']:+.4f} | sömn {kt(S['somn_per_h'], 'ms/h')}, "
+          f"vaken {kt(S['vaken_per_10min'], 'ms/10 min')} | sjukflagga {S['andel_sjuk1']:.1%} → "
+          f"{S['andel_sjuk2']:.1%}, kvar {S['sjuk1_kvar_i_sjuk2']:.0%} | pass utan last {S['pass_utan_last_dygn']} dygn")
     if tr:
         print(f"  tröskel {tr['knut']}: {tr['r2_med_form']:.4f} ({tr['vinst_mot_form']:+.4f} mot form)  extra lutning över "
               f"{tr['over_knut_extra']['b']:+.4f} (t {tr['over_knut_extra']['b'] / tr['over_knut_extra']['se']:+.1f}), n över {tr['n_over']}")
