@@ -72,9 +72,20 @@ så modellen använder bara dygn från dess.
 VAD SOM BEHÖVS
 --------------
 En Garmin-klocka som mäter HRV på natten (HRV-status), t.ex. Forerunner
-255/265/955/965, Fenix 7/8, Epix, Enduro 3, Venu 2/3, Vivoactive 5.
-Eller en Oura-ring (generation 3 eller nyare) med aktivt medlemskap.
-Modellen behöver minst ett halvår med HRV, helst ett år eller mer.
+255/265/955/965, Fenix 7/8, Epix, Enduro 2/3, Venu 2 Plus, Venu 3,
+Vivoactive 5. Eller en Oura-ring (generation 3 eller nyare) med aktivt
+medlemskap. Modellen behöver minst ett halvår med HRV, helst ett år eller mer.
+
+Osäker på din klocka? Öppna Garmin Connect-appen på telefonen och titta
+bland hälsostatistiken. Finns "HRV-status" där fungerar appen.
+
+Klockor som INTE mäter HRV-status, bland andra:
+  Venu Sq och Venu Sq 2, Venu och Venu 2/2S (Venu 2 Plus har det),
+  Vivoactive 3 och 4, Vivosmart 4 och 5, Fenix 5 och 6,
+  Forerunner 45, 55, 245, 745 och 945, Instinct och Instinct 2.
+Med en sådan klocka kan appen visa vilopuls, sömn, stress och träning,
+men inte räkna modellen eller ta fram ett bidrag. Bytte du klocka för en
+tid sedan räknas modellen från den dag den nya klockan började mäta HRV.
 
 
 BIDRA

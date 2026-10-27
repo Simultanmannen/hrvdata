@@ -573,6 +573,14 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
     D, A = las(con)
     first = forsta_hrv(D)
     if first is None:
+        n_rhr = sum(1 for v in D.values() if v['rhr'] is not None)
+        if n_rhr >= 30:
+            # Vilopuls finns men ingen HRV: klockan saknar troligen HRV-status (punkt 10)
+            return {'ok': False, 'skal': (
+                f'Klockan har mätt vilopuls {n_rhr} nätter men ingen nattlig HRV. Den saknar troligen '
+                'HRV-status, till exempel Venu Sq, Venu 2 (inte Plus), Vivoactive 4, Vivosmart 5, Fenix 6 eller '
+                'äldre Forerunner. Se listan i LÄSMIG. Vilopuls, sömn, stress och träning visas ändå under '
+                'Hälsa och Träning.')}
         return {'ok': False, 'skal': 'Ingen nattlig HRV i databasen ännu.'}
     start = max(start or first, first)
     tick('Sjukindex', 0.05)
