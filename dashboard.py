@@ -145,6 +145,12 @@ def fmt(x, nd=1, sign=False, unit=""):
     return s.replace(".", ",").replace("-", "−") + unit
 
 
+def delta(x, nd=1, unit=""):
+    """Förändringsvärde till st.metric. Streamlit läser pilens riktning ur första tecknet och känner
+    bara igen ASCII-minus, så det typografiska minustecknet från fmt gav en uppåtpil på negativa värden."""
+    return fmt(x, nd, True, unit).replace("−", "-", 1)
+
+
 # ------------------------------------------------------------------ data
 def db_version() -> float:
     files = [DB_PATH, DB_PATH.with_name(DB_PATH.name + "-wal")]
@@ -591,8 +597,7 @@ with tab_over:
     c = st.columns(6)
     if last is not None:
         c[0].metric(f"HRV senaste natten ({sv(last['datum'])})", fmt(last["hrv_night"], 0, unit=" ms"),
-                    None if pd.isna(last["hrv_7d"]) else fmt(last["hrv_night"] - last["hrv_7d"], 0, True,
-                                                              " ms mot 7 dygn"))
+                    None if pd.isna(last["hrv_7d"]) else delta(last["hrv_night"] - last["hrv_7d"], 0, " ms mot 7 dygn"))
         c[1].metric("HRV 7-dygnssnitt", fmt(last["hrv_7d"], 0, unit=" ms"))
     lr = days_all.dropna(subset=["rhr"])
     if not lr.empty:
@@ -701,7 +706,7 @@ with tab_dos:
         c[0].metric("Förklarad variation, utan form", fmt(R["r2"]["bas"] * 100, 0, unit=" %"),
                     help="R² ut ur stickprovet: varje natt förutsägs med en modell som bara sett tidigare nätter.")
         c[1].metric("…med den långsamma formen", fmt(R["r2"]["form"] * 100, 0, unit=" %"),
-                    fmt((R["r2"]["form"] - R["r2"]["bas"]) * 100, 1, True, " procentenheter"))
+                    delta((R["r2"]["form"] - R["r2"]["bas"]) * 100, 1, " procentenheter"))
         c[2].metric("Typiskt fel", fmt(R["mae"]["form"], 1, unit=" ms"))
         c[3].metric("Dygn i modellen", f"{R['n']}",
                     help=f"Förklarad variation och typiskt fel är prognoser för de sista {R['n_utv']} dygnen.")
@@ -771,16 +776,18 @@ with tab_plan:
                         f"{fmt(arv0, 1, True)} över det vanliga första dagen och {fmt(arv3, 1, True)} fjärde dagen. "
                         "Det lägger modellen på själv – bedöm varje dag för sig.")
             st.info(txt)
+        st.caption("Per dag: övre rutan är dagens övriga stress (utan träningen), undre rutan låser dagen.")
         cols = st.columns(7)
         nivaer, las = [], []
         niv_lista = list(planering.NIVAER)
         for i, col in enumerate(cols):
             d = pd.Timestamp(start) + pd.Timedelta(days=i)
             col.markdown(f"**{planering.VECKODAGAR[d.weekday()]}** {d.day}/{d.month}")
+            # Etiketterna dolda i alla kolumner, annars blir första kolumnen högre än de andra
             nivaer.append(col.selectbox("Övrig stress", niv_lista, index=niv_lista.index("normal"),
-                                        key=f"plan_s{i}", label_visibility="collapsed" if i else "visible"))
+                                        key=f"plan_s{i}", label_visibility="collapsed"))
             las.append(col.selectbox("Låst", planering.LAS, index=0, key=f"plan_l{i}",
-                                     label_visibility="collapsed" if i else "visible"))
+                                     label_visibility="collapsed"))
         vv = P.vanlig
         with st.expander(f"Veckans träning – förvalt din vanliga vecka: {vv['last']:.0f} i last, "
                          f"{vv['dagar']} passdagar, {vv['hard']} hårda, {vv['styrka']} styrkepass"):
@@ -811,8 +818,7 @@ with tab_plan:
             pl = F["plan"]
             c = st.columns(4)
             c[0].metric("Nätter under spannet, förslaget", fmt(pl["under"], 1),
-                        # ASCII-minus: Streamlit läser pilens riktning ur första tecknet
-                        fmt(pl["under"] - F["vanlig_under"], 1, True, " mot ditt vanliga mönster").replace("−", "-"),
+                        delta(pl["under"] - F["vanlig_under"], 1, " mot ditt vanliga mönster"),
                         delta_color="inverse",
                         help="Förväntat antal av veckans sju nätter under ditt normalspann, med modellens "
                              "osäkerhet inräknad.")
