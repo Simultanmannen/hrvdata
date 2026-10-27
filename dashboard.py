@@ -933,6 +933,27 @@ with tab_form:
             st.plotly_chart(style(fig, 280, title="Hur länge formen hänger i (autokorrelation)",
                                   hovermode="closest", yaxis_range=[min(0, *acfd.values()) - .05, 1]),
                             width="stretch")
+        L = R.get("lang_last")
+        if L:
+            bn = L["banister"]
+            with st.expander("Är formen bara uppbyggd träning? (träningens långa minne)"):
+                vinst = bn["vinst_mot_form"]
+                st.markdown(
+                    "Ett vanligt sätt att räkna form (Banister, som Stravas Fitness och Freshness) är två glidande "
+                    "medel av träningslasten: ett långt för uppbyggd kondition och ett kort för trötthet. Appen har "
+                    f"prövat alla kombinationer. Bästa paret för dig är {bn['fitness_hl']} och {bn['trotthet_hl']} "
+                    "dygns halveringstid.")
+                c = st.columns(3)
+                c[0].metric("Förklarad variation med formen", fmt(L["r2_form"] * 100, 1, unit=" %"))
+                c[1].metric("…plus träningens långa minne", fmt(bn["r2_med_form"] * 100, 1, unit=" %"),
+                            delta(vinst * 100, 1, " procentenheter"))
+                c[2].metric("…bara träningens minne, utan form", fmt(bn["r2"] * 100, 1, unit=" %"))
+                if vinst > 0.002:
+                    st.caption("Hos dig tillför träningens långa minne något utöver formen. En del av dina långsamma "
+                               "svängningar följer alltså hur mycket du tränat de senaste veckorna.")
+                else:
+                    st.caption("Hos dig tillför träningens långa minne inget utöver formen. Formen är alltså inte "
+                               "uppbyggd träning i förklädnad, utan ett tillstånd som träningsmängden inte förklarar.")
 
 # ------------------------------------------------------------------ hälsa
 with tab_health:

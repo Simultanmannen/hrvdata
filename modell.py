@@ -325,6 +325,120 @@ def acf(x, lag=1):
     return float(np.sum(x[lag:] * x[:-lag]) / np.sum(x * x))
 
 
+# ----------------------------------------------------------------- lång lastlagg (Banister, tröskel)
+FITNESS_HL = [14, 21, 30, 42, 60, 90]   # halveringstider (dygn) som skannas för det långa lastminnet
+TROTTHET_HL = [2, 3, 5, 7, 10]          # och för det korta
+
+
+def expanding_snabb(X, y, t0):
+    """Samma prognos som Kedja.expanding (varje dygn skattas på strikt tidigare dygn), men med
+    stegvis uppdaterade summor X'X och X'y i stället för en ny minsta kvadrat-lösning från början.
+    Rader med saknade värden hoppas över i skattningen och får ingen prognos, som i originalet."""
+    N, p = X.shape
+    ok = np.isfinite(X).all(1) & np.isfinite(y)
+    pred = np.full(N, np.nan)
+    A, c = np.zeros((p, p)), np.zeros(p)
+    for i in range(N):
+        if i >= t0 and ok[i]:
+            try:
+                b = np.linalg.solve(A, c)
+            except np.linalg.LinAlgError:
+                b = np.linalg.lstsq(A, c, rcond=None)[0]
+            pred[i] = X[i] @ b
+        if ok[i]:
+            A += np.outer(X[i], X[i])
+            c += X[i] * y[i]
+    return pred, np.isfinite(pred)
+
+
+def lastserie(A) -> dict:
+    """Daglig träningslast för varje kalenderdygn från första passet (dygn utan pass = 0)."""
+    last = {}
+    for d, acts in A.items():
+        last[ordn(d)] = sum((a['load'] or 0) for a in acts)
+    if not last:
+        return {}
+    o0, o1 = min(last), max(last)
+    return {o: last.get(o, 0.0) for o in range(o0, o1 + 1)}
+
+
+def lastminne(serie: dict, ords, halflife: float) -> np.ndarray:
+    """Glidande medel (Banister/Coggan) av den dagliga lasten till och med dygn d:
+    F_d = λ·F_{d−1} + (1−λ)·last_d, λ = 0,5^(1/halveringstid). Allt är känt före natten efter d."""
+    if not serie:
+        return np.zeros(len(ords))
+    lam = 0.5 ** (1.0 / halflife)
+    f, F = 0.0, {}
+    for o in range(min(serie), max(max(serie), int(max(ords))) + 1):
+        f = lam * f + (1 - lam) * serie.get(o, 0.0)
+        F[o] = f
+    return np.array([F.get(int(o), 0.0) for o in ords])
+
+
+def lang_last(K, A, form) -> dict:
+    """Punkt 4: bär träningslasten ett långt minne som den långsamma formen inte redan fångar?
+
+    Jämför ut ur stickprovet (samma T0 som huvudmodellen) mot basmodellen och mot basmodellen med form:
+      - Banister: + fitness (lång halveringstid) + trötthet (kort), alla kombinationer skannas
+      - tröskel: + max(last − knut, 0), last över knuten får en egen lutning, knutar ur egna percentiler
+    BASE-specen ändras inte; det här är jämförelser vid sidan av."""
+    y, N, t0 = K.y, K.N, K.t0
+    Xb = K.design(BASE, np.arange(N))
+    pb, mb = expanding_snabb(Xb, y, t0)
+    pf, mf = expanding_snabb(np.column_stack([Xb, form]), y, t0)
+    r2_bas, r2_form = K.r2(pb, mb), K.r2(pf, mf)
+    serie = lastserie(A)
+    fit = {h: lastminne(serie, K.o, h) for h in FITNESS_HL}
+    tro = {h: lastminne(serie, K.o, h) for h in TROTTHET_HL}
+
+    skanning, bast = {}, None
+    for hf in FITNESS_HL:
+        for ht in TROTTHET_HL:
+            p, m = expanding_snabb(np.column_stack([Xb, fit[hf], tro[ht]]), y, t0)
+            v = K.r2(p, m)
+            skanning[f"{hf}/{ht}"] = v
+            if bast is None or v > bast[2]:
+                bast = (hf, ht, v)
+    hf, ht, r2_ban = bast
+    p, m = expanding_snabb(np.column_stack([Xb, form, fit[hf], tro[ht]]), y, t0)
+    r2_ban_form = K.r2(p, m)
+    b, se, _ = ols(np.column_stack([Xb, fit[hf], tro[ht]]), y)
+    bf, sef, _ = ols(np.column_stack([Xb, form, fit[hf], tro[ht]]), y)
+    banister = {
+        "fitness_hl": hf, "trotthet_hl": ht, "r2": r2_ban, "r2_med_form": r2_ban_form,
+        "vinst_mot_bas": r2_ban - r2_bas, "vinst_mot_form": r2_ban_form - r2_form,
+        "fitness": {"b": float(b[-2]), "se": float(se[-2])}, "trotthet": {"b": float(b[-1]), "se": float(se[-1])},
+        "fitness_med_form": {"b": float(bf[-2]), "se": float(sef[-2])},
+        "trotthet_med_form": {"b": float(bf[-1]), "se": float(sef[-1])},
+        "skanning": skanning,
+        "fitness_sd": float(np.std(fit[hf])), "trotthet_sd": float(np.std(tro[ht])),
+    }
+
+    last = K.d['load']
+    pos = last[last > 0]
+    knutar = sorted({round(float(np.percentile(pos, q))) for q in (50, 75, 90)}) if len(pos) >= 30 else []
+    tskan, tbast = {}, None
+    for k in knutar:
+        hinge = np.maximum(last - k, 0.0)
+        if (hinge > 0).sum() < 15:
+            continue
+        p, m = expanding_snabb(np.column_stack([Xb, form, hinge]), y, t0)
+        v = K.r2(p, m)
+        tskan[str(k)] = v
+        if tbast is None or v > tbast[1]:
+            tbast = (k, v)
+    troskel = None
+    if tbast:
+        k, v = tbast
+        hinge = np.maximum(last - k, 0.0)
+        b, se, _ = ols(np.column_stack([Xb, form, hinge]), y)
+        troskel = {"knut": k, "r2_med_form": v, "vinst_mot_form": v - r2_form,
+                   "under_knut": {"b": float(b[BASE.index('load') + 1]), "se": float(se[BASE.index('load') + 1])},
+                   "over_knut_extra": {"b": float(b[-1]), "se": float(se[-1])},
+                   "n_over": int((hinge > 0).sum()), "skanning": tskan}
+    return {"r2_bas": r2_bas, "r2_form": r2_form, "banister": banister, "troskel": troskel}
+
+
 # ----------------------------------------------------------------- hela körningen
 def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None,
         progress=None) -> dict:
@@ -376,6 +490,8 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
     koef_total = {k: {'b': float(bt[i + 1]), 'se': float(set_[i + 1])} for i, k in enumerate(TOTAL + ['form'])}
     suff = {'direkt': tillracklig(Xs, K.y, BASE + ['form']), 'total': tillracklig(Xt, K.y, TOTAL + ['form'])}
 
+    tick('Lång lastlagg', 0.85)
+    ll = lang_last(K, A, form)
     tick('Nyckeltal', 0.9)
     ext = extra_nyckeltal(K, D, A, form, res, sjuk, start)
     tick('Klart', 1.0)
@@ -387,7 +503,7 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
                'utan_h7_form': K.r2(p_nh7f, m_nh7f)},
         'mae': {'bas': K.mae(p0, m0), 'form': K.mae(p_form, m_form)},
         'n_utv': int(m0.sum()),
-        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols, 'suff': suff,
+        'scan': scan, 'koef': koef, 'koef_total': koef_total, 'n_ols': n_ols, 'suff': suff, 'lang_last': ll,
         **ext,
     }
 
@@ -503,3 +619,12 @@ if __name__ == '__main__':
     print(f"form sd {R['form_sd']:.2f}  acf1 {R['form_acf1']:.3f}  res acf1 {R['res_acf1']:.3f}")
     print('tungt pass', R['tungt_pass'])
     print('nedvarvning', R['nedvarvning'])
+    L = R['lang_last']
+    bn, tr = L['banister'], L['troskel']
+    print(f"lång lastlagg: bas {L['r2_bas']:.4f}  form {L['r2_form']:.4f}  | Banister bäst {bn['fitness_hl']}/"
+          f"{bn['trotthet_hl']} d: {bn['r2']:.4f} ({bn['vinst_mot_bas']:+.4f} mot bas), med form {bn['r2_med_form']:.4f} "
+          f"({bn['vinst_mot_form']:+.4f} mot form)  fitness {bn['fitness']['b']:+.4f} (t {bn['fitness']['b'] / bn['fitness']['se']:+.1f})  "
+          f"trötthet {bn['trotthet']['b']:+.4f} (t {bn['trotthet']['b'] / bn['trotthet']['se']:+.1f})")
+    if tr:
+        print(f"  tröskel {tr['knut']}: {tr['r2_med_form']:.4f} ({tr['vinst_mot_form']:+.4f} mot form)  extra lutning över "
+              f"{tr['over_knut_extra']['b']:+.4f} (t {tr['over_knut_extra']['b'] / tr['over_knut_extra']['se']:+.1f}), n över {tr['n_over']}")
