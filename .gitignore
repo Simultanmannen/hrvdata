@@ -1,0 +1,24 @@
+# Användardata, bidrag och utvecklarens egna analysfiler ska aldrig in i git. Repot är publikt.
+data/
+bidrag/
+rapporter/
+dist/
+.verktyg/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+*_tokens.json
+samla.py
+rapport_bidrag.py
+referens.json
+
+# prov/: bara testskripten följer med, inte utdata eller äldre analysskript
+prov/*
+!prov/prov_oura_mock.py
+!prov/prov_dashboard_oura.py
+
+# Interna anteckningar
+CLAUDE.md
+ANTECKNINGAR.md

@@ -1,0 +1,103 @@
+HRV-DATA
+========
+
+Visar din nattliga HRV från Garmin eller Oura och räknar ut hur din kropp svarar på
+träning och vardagsstress: vad ett pass kostar natten efter, hur mycket
+stressen väger, och en "långsam form" som klockan själv inte ser.
+All data sparas här på datorn.
+
+
+SÅ HÄR STARTAR DU
+-----------------
+1. Packa upp zip-filen, till exempel till mappen Dokument.
+   (Högerklicka på zip-filen > "Extrahera alla...")
+2. Öppna mappen HRV-data och dubbelklicka på "Starta HRV-data".
+3. Första gången laddas det som behövs ner automatiskt. Det tar 1-3 minuter.
+   Sedan öppnas appen i webbläsaren.
+4. Garmin: logga in med samma e-post och lösenord som i Garmin Connect-appen.
+   Oura: se avsnittet "OURA" nedan.
+5. Hämtningen startar direkt och går bakåt i tiden så långt klockan eller
+   ringen har mätt HRV. Första gången tar det 15-40 minuter med Garmin och
+   några minuter med Oura. Du kan använda appen under tiden. Avbryts den
+   fortsätter den där den slutade nästa gång.
+
+Låt det svarta fönstret vara öppet medan du använder appen.
+Stäng det när du är klar.
+
+Nästa gång: dubbelklicka på "Starta HRV-data" igen och klicka på
+"Hämta nya data" i appen.
+
+
+PÅ MAC
+------
+Samma sak, men använd filen "Starta HRV-data.command" (inte .bat).
+Python behövs inte i förväg, allt laddas ner till appmappen första gången.
+
+Första gången stoppar macOS filen eftersom den kommer från internet:
+- macOS 14 och äldre: högerklicka (eller ctrl-klicka) på filen, välj
+  "Öppna" och sedan "Öppna" igen i rutan som visas.
+- macOS 15 och nyare: dubbelklicka, klicka "Klar" i varningen. Öppna
+  Systeminställningar > Integritet och säkerhet, scrolla ner och klicka
+  "Öppna ändå" vid HRV-data. Dubbelklicka på filen igen.
+Därefter startar den direkt med dubbelklick.
+
+Fungerar inget av det: öppna programmet Terminal, skriv  bash  följt av
+ett mellanslag, dra in filen "Starta HRV-data.command" i fönstret och
+tryck Enter.
+
+Terminalfönstret som öppnas ska vara öppet medan du använder appen.
+
+
+OURA
+----
+Oura har inga vanliga inloggningar för program som det här. I stället
+registrerar du en egen "API-nyckel" i ditt Oura-konto (gratis, en gång):
+1. Gå till https://cloud.ouraring.com/oauth/applications i webbläsaren och
+   logga in med ditt Oura-konto.
+2. Klicka "Create a new application" (eller liknande). Namn: HRV-data.
+   Redirect URI: exakt   http://localhost:8765/callback
+   Övriga fält kan lämnas som de är. Spara.
+3. Du får ett Client ID och ett Client Secret. Kopiera dem.
+4. I appen: fliken "Data & konto", underfliken "Oura". Klistra in båda och
+   klicka "Anslut Oura". Webbläsaren öppnar Ouras sida där du godkänner
+   att HRV-data får läsa dina data. Sedan startar hämtningen.
+Appen sparar nyckeln i mappen "data". Ditt Oura-lösenord passerar aldrig appen.
+
+Oura mäter inte samma saker som Garmin. Träningslast räknas som passets
+minuter gånger intensitet (lätt/måttlig/hård enligt Oura) och dagsstress som
+minuter med hög stress enligt Oura. Oura började mäta dagsstress hösten 2023,
+så modellen använder bara dygn från dess.
+
+
+VAD SOM BEHÖVS
+--------------
+En Garmin-klocka som mäter HRV på natten (HRV-status), t.ex. Forerunner
+255/265/955/965, Fenix 7/8, Epix, Enduro 3, Venu 2/3, Vivoactive 5.
+Eller en Oura-ring (generation 3 eller nyare) med aktivt medlemskap.
+Modellen behöver minst ett halvår med HRV, helst ett år eller mer.
+
+
+BIDRA
+-----
+Under fliken "Bidra" kan du spara en liten fil med sammanfattade resultat
+från din modell (inga dygnsvärden, inga datum, inga pass). Den används för
+att pröva om modellen gäller för fler än den person den byggdes på. Du ser
+hela filen innan du sparar den, och det är du som skickar den.
+
+
+OM WINDOWS VARNAR
+-----------------
+Windows kan visa "Windows skyddade datorn" eftersom filen kommer från internet.
+Klicka på "Mer information" och sedan "Kör ändå".
+
+
+BRA ATT VETA
+------------
+- Lösenordet sparas inte. Appen sparar bara en inloggningsnyckel i mappen "data"
+  (Garmin: mappen garmin_tokens, Oura: filen oura_tokens.json).
+- Dela aldrig mappen "data" med någon annan. Den innehåller din inloggning och dina data.
+- Säkerhetskopia: kopiera mappen "data".
+- Ny version av appen: när det finns en visas en ruta högst upp i appen.
+  Klicka på "Uppdatera nu" så installeras den och appen startar om.
+  Dina data ligger kvar.
+- Ta bort appen: radera hela mappen HRV-data.
