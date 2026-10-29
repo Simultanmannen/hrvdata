@@ -8,7 +8,11 @@ Schema 2 (version 0.3.2): + 'tillracklig', summor och produktsummor (n, X'X, X'y
 modellvarianterna, i råa och standardiserade enheter. Räcker för en blandad modell över personer
 i samla.py. Inga datum finns med. Summorna avslöjar i regel inga enskilda dygn, undantaget är en
 variabel som bara är skild från noll ett enda dygn (t.ex. ett enda sjukdygn), där produktsumman
-blir det dygnets värde, fortfarande utan datum."""
+blir det dygnets värde, fortfarande utan datum.
+
+Schema 3 (version 0.5.0, punkt 11): + 'tillracklig.bred' och 'tillracklig.bred_komplett', samma sorts
+summor för en supermängd av kandidatregressorer (BASE, sedan modell.BRED_EXTRA, sist form), så att
+varianter kan poolas över gruppen i samla.py. 'direkt' och 'total' är oförändrade."""
 import json
 import math
 from datetime import date
@@ -18,7 +22,7 @@ import numpy as np
 import modell
 from version import VERSION
 
-SCHEMA = 2
+SCHEMA = 3
 
 
 def _r(x, n=4):

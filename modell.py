@@ -38,7 +38,7 @@ MIN_RADER = 150          # färre modellrader än så: ingen modell
 # ----------------------------------------------------------------- inläsning
 DAY_COLS = ['date', 'hrv_night', 'hrv_7d', 'rhr', 'respiration_avg', 'skin_temp_dev_c',
             'stress_avg', 'sleep_seconds', 'sleep_score', 'deep_seconds', 'rem_seconds',
-            'awake_seconds', 'steps', 'fetched_at']
+            'awake_seconds', 'steps', 'fetched_at', 'stress_vaken']
 
 
 def las(con: sqlite3.Connection):
@@ -605,6 +605,102 @@ def minut_variant(K, form) -> dict:
     return ut
 
 
+# ----------------------------------------------------------------- schema 3: bred tillräcklig statistik
+# Punkt 11. Fast ordning, nya kolumner bara i slutet, namn är facit. De nio första är BASE (h7 heter r7 i
+# vilopulsvägen). Påverkar inte basmodellen: bara summor för poolning i samla.py.
+BRED_EXTRA = ['stress_vaken', 'somn_igar', 'vaken_igar', 'emin', 'lmin', 'load_over_p75',
+              'load_ewma7', 'load_ewma21', 'load_ewma42']
+MIN_GILTIGA = 30
+
+
+def ewma_tau(serie: dict, ords, tau: float) -> np.ndarray:
+    """EWMA av dagslasten t.o.m. dygn d med tidskonstant tau (CTL-konventionen, α = 1/tau), vila = 0."""
+    if not serie:
+        return np.zeros(len(ords))
+    f, F = 0.0, {}
+    for o in range(min(serie), max(max(serie), int(max(ords))) + 1):
+        f += (serie.get(o, 0.0) - f) / tau
+        F[o] = f
+    return np.array([F.get(int(o), 0.0) for o in ords])
+
+
+def tillracklig_bred(K, D, A, form) -> dict:
+    """{'bred', 'bred_komplett'}: tillräcklig statistik (som tillracklig) för BASE + BRED_EXTRA + form.
+    'bred' på alla rader där BASE finns, saknade extra värden ersatta med medianen ur de första T0 dygnen
+    (som i varianterna), med 'n_giltiga' per kolumn. En kolumn med färre än MIN_GILTIGA giltiga värden
+    fylls med 0 och blir då utan spridning, vilket samla.py läser som saknad information.
+    'bred_komplett' bara på rader där alla extra kolumner finns (None om färre än 60 rader)."""
+    N, t0 = K.N, K.t0
+    ords = K.o
+    load = K.d['load']
+    pass_last = load[load > 0]
+    p75 = float(np.percentile(pass_last, 75)) if len(pass_last) else 0.0
+    serie = lastserie(A)
+    extra = {
+        'stress_vaken': np.array([(D.get(d) or {}).get('stress_vaken') for d in K.dates], float),
+        'somn_igar': K.d['somn_h'], 'vaken_igar': K.d['vaken_min'],
+        'emin': K.d['emin'], 'lmin': K.d['lmin'],
+        'load_over_p75': np.maximum(load - p75, 0.0),
+        'load_ewma7': ewma_tau(serie, ords, 7), 'load_ewma21': ewma_tau(serie, ords, 21),
+        'load_ewma42': ewma_tau(serie, ords, 42),
+    }
+    giltig = {k: np.isfinite(v) for k, v in extra.items()}
+    fylld = []
+    for k in BRED_EXTRA:
+        v, g = extra[k], giltig[k]
+        if g.sum() < MIN_GILTIGA:
+            fylld.append(np.zeros(N))
+            continue
+        bas = v[:t0][g[:t0]]
+        med = float(np.median(bas)) if len(bas) else float(np.median(v[g]))
+        fylld.append(np.where(g, v, med))
+    namn = list(K.spec) + BRED_EXTRA + ['form']
+    X = np.column_stack([K.design(K.spec, np.arange(N)), *fylld, form])
+    bred = tillracklig(X, K.y, namn)
+    bred['n_giltiga'] = {k: int(giltig[k].sum()) for k in BRED_EXTRA}
+    bred['p75_last'] = p75
+    alla = np.all(np.column_stack([giltig[k] for k in BRED_EXTRA]), axis=1)
+    komplett = tillracklig(X[alla], K.y[alla], namn) if alla.sum() >= 60 else None
+    return {'bred': bred, 'bred_komplett': komplett}
+
+
+def gruppkrympning(R: dict, prior: dict | None, kalla: str | None = None) -> dict | None:
+    """Punkt 11: personens direkta modell (BASE + form) krympt mot gruppen,
+        β_i = (X'X/σ² + P)⁻¹ (X'y/σ² + P·β_grupp),  P = G⁻¹ för priorns kolumner, 0 för övriga (form).
+    Används när personens egen lastkostnad inte går att skilja från noll. None om priorn saknas, gäller
+    en annan källa eller utfall, eller bygger på färre än 3 personer. Ändrar inte R."""
+    if not prior or not R.get("ok") or R.get("utfall", "hrv") != "hrv":
+        return None
+    if prior.get("utfall") != "hrv" or prior.get("kalla") != (kalla or "garmin") or prior.get("k", 0) < 3:
+        return None
+    t = R["suff"]["direkt"]
+    namn = t["namn"]
+    if any(k not in namn for k in prior["namn"]):
+        return None
+    A, c = np.array(t["ra"]["XtX"], float), np.array(t["ra"]["Xty"], float)
+    n, p = t["n"], len(namn)
+    b_egen = np.linalg.solve(A, c)
+    s2 = (t["ra"]["yty"] - b_egen @ c) / (n - p)
+    V_egen = s2 * np.linalg.inv(A)
+    idx = [namn.index(k) for k in prior["namn"]]
+    G = np.array(prior["G"], float)
+    # Golv: en spridning på noll i gruppen låser annars koefficienten helt (och G blir singulär)
+    G = G + np.diag(np.maximum(1e-4 * np.diag(V_egen)[idx], 1e-12))
+    P = np.zeros((p, p))
+    P[np.ix_(idx, idx)] = np.linalg.inv(G)
+    m = np.zeros(p)
+    m[idx] = prior["beta"]
+    H = A / s2 + P
+    b = np.linalg.solve(H, c / s2 + P @ m)
+    V = np.linalg.inv(H)
+    se = np.sqrt(np.diag(V))
+    return {"namn": namn, "b": b, "V": V, "koef": {k: {"b": float(b[j]), "se": float(se[j])}
+                                                   for j, k in enumerate(namn) if k != "konst"},
+            "egen": {k: {"b": float(b_egen[j]), "se": float(np.sqrt(V_egen[j, j]))}
+                     for j, k in enumerate(namn) if k != "konst"},
+            "k": int(prior["k"]), "datum": prior.get("datum"), "typ": prior.get("typ")}
+
+
 # ----------------------------------------------------------------- hela körningen
 def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None,
         progress=None, utfall: str | None = None) -> dict:
@@ -689,6 +785,7 @@ def _kor(D, A, start, t0, tick, utfall) -> dict:
     bt, set_, _ = ols(Xt, K.y)
     koef_total = {k: {'b': float(bt[i + 1]), 'se': float(set_[i + 1])} for i, k in enumerate(total + ['form'])}
     suff = {'direkt': tillracklig(Xs, K.y, spec + ['form']), 'total': tillracklig(Xt, K.y, total + ['form'])}
+    suff.update(tillracklig_bred(K, D, A, form))   # punkt 11, schema 3
 
     tick('Lång lastlagg', 0.85)
     ll = lang_last(K, A, form)

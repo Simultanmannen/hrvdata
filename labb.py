@@ -38,9 +38,11 @@ STRESSNIVAER = ["lugn", "medel", "tung", "mycket tung"]
 
 
 class Labb:
-    def __init__(self, R: dict, P, PT: dict | None = None, seed: int = 0):
-        """R = modell.kor, P = planering.Planerare (stressdelningen, nivåerna, spärren), PT = passtyper.bygg."""
-        self.R, self.P = R, P
+    def __init__(self, R: dict, P, PT: dict | None = None, seed: int = 0, stod: dict | None = None):
+        """R = modell.kor, P = planering.Planerare (stressdelningen, nivåerna, spärren), PT = passtyper.bygg.
+        stod = modell.gruppkrympning (punkt 11): koefficienterna och kovariansen krympta mot gruppen, används
+        i stället för personens egna när lastkostnaden är spärrad."""
+        self.R, self.P, self.stod = R, P, stod
         S = R["suff"]["direkt"]
         self.namn = S["namn"]                                    # konst, h7, stress, ..., form
         XtX, Xty = np.array(S["ra"]["XtX"]), np.array(S["ra"]["Xty"])
@@ -48,6 +50,8 @@ class Labb:
         self.b = np.linalg.solve(XtX, Xty)
         s2 = (S["ra"]["yty"] - self.b @ Xty) / (n - p)
         self.V = s2 * np.linalg.inv(XtX)
+        if stod is not None:
+            self.b, self.V = np.asarray(stod["b"], float), np.asarray(stod["V"], float)
         # Spridningen för en enskild natt kring linjen (punkt 14a): modellens residualer, samma rader som ols
         self.sigma_res = float(math.sqrt(s2))
         self.i = {k: j for j, k in enumerate(self.namn)}

@@ -835,6 +835,35 @@ with tab_a:
                       "periodvalet.")
 
 
+# ------------------------------------------------------------------ gruppstöd (punkt 11)
+@st.cache_data(show_spinner=False)
+def grupp_prior_fil() -> dict | None:
+    """grupp_prior.json följer med i releasen (skattad ur gruppens bidrag i samla.py). Saknas den: inget stöd."""
+    try:
+        return json.loads((ROOT / "grupp_prior.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+@st.cache_data(show_spinner=False)
+def gruppstod(v) -> dict | None:
+    """Personens modell krympt mot gruppen, bara när den egna lastkostnaden är spärrad (punkt 7)."""
+    P = planerare(v)
+    if P is None or not P.sparr:
+        return None
+    return modell.gruppkrympning(run_model(v), grupp_prior_fil(), data_source)
+
+
+def stodtext(stod: dict, inledning: str) -> str:
+    k, e = stod["koef"], stod["egen"]
+    lk = planerare(v).lastkostnad   # spärrens tal (punkt 7), det är dem stödet ersätter
+    return (f"**Stödd av gruppen.** Din egen lastkostnad går inte att skilja från noll (natten efter "
+            f"t {fmt(lk['natt1']['t'], 1, True)}, natten därpå t {fmt(lk['natt2']['t'], 1, True)}). {inledning} med "
+            f"din data vägd ihop med gruppens ({stod['k']} personer). Lastens direkta effekt, utöver det träningen "
+            f"gör med dagsstressen, per 100 i last natten efter: din egen {fmt(e['load']['b'] * 100, 1, True, ' ms')}, "
+            f"med gruppen {fmt(k['load']['b'] * 100, 1, True, ' ms')}. Ju mer egen data, desto mindre väger gruppen.")
+
+
 # ------------------------------------------------------------------ figurer för b, c och d
 KLASSER = [(0, 0, "0"), (1, 50, "1–50"), (50, 100, "50–100"), (100, 150, "100–150"), (150, 200, "150–200"),
            (200, 300, "200–300"), (300, 10 ** 9, "300+")]
@@ -1020,6 +1049,8 @@ with tab_b:
         st.plotly_chart(fig_kostnader(poster), width="stretch")
         figurtext(*[p[3] for p in poster])
         figurtext(md("timme"))
+        if not VP and (stod := gruppstod(v)) is not None:
+            st.info(stodtext(stod, "Träningslabbet räknar därför"))
 
         if mf_all is not None:
             st.markdown("#### Din form")
@@ -1102,7 +1133,7 @@ with tab_b:
 @st.cache_resource(max_entries=1, show_spinner=False)
 def labbet(v):
     P = planerare(v)
-    return None if P is None else labb.Labb(run_model(v), P, passtyp_data(v))
+    return None if P is None else labb.Labb(run_model(v), P, passtyp_data(v), stod=gruppstod(v))
 
 
 TIMMAR = list(range(5, 23))
@@ -1209,7 +1240,9 @@ with tab_c:
             "den flyttar återhämtningen.")
         st.markdown("**" + L.text(S) + "**")
         lk = planerare(v).lastkostnad
-        if planerare(v).sparr:
+        if L.stod is not None:
+            st.info(stodtext(L.stod, "Labbet räknar därför"))
+        elif planerare(v).sparr:
             st.warning(
                 "**Träningens kostnad går inte att skilja från noll i din data**, varken natten efter "
                 f"(t {fmt(lk['natt1']['t'], 1, True)}), natten därpå (t {fmt(lk['natt2']['t'], 1, True)}) eller "

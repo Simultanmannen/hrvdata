@@ -108,6 +108,12 @@ från din modell (inga dygnsvärden, inga datum, inga pass). Den används för
 att pröva om modellen gäller för fler än den person den byggdes på. Du ser
 hela filen innan du sparar den, och det är du som skickar den.
 
+Från version 0.5.0 innehåller filen fler summor, så att fler varianter av
+modellen kan prövas på hela gruppen. Har du skickat ett bidrag tidigare:
+tryck först på "Hämta nya data" (då hämtas stressen under vaken tid ungefär
+140 dygn bakåt, så långt Garmin sparar den) och skicka sedan ett nytt bidrag.
+Det ersätter det gamla.
+
 
 OM WINDOWS VARNAR
 -----------------

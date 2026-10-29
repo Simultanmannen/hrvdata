@@ -19,6 +19,9 @@ FILES = ["Starta HRV-data.bat", "Starta HRV-data.command", "LÄSMIG.txt", "start
          "requirements-lock.txt", ".streamlit/config.toml"]
 # Spärr: de här får aldrig in i ett publikt paket, även om någon lägger till dem i FILES.
 FORBJUDNA = {"referens.json", "samla.py", "rapport_bidrag.py", "CLAUDE.md"}
+# Packas om de finns. grupp_prior.json (punkt 11) skrivs av samla.py --prior när minst tre bidrag med
+# tillräcklig statistik finns; utan den räknar appen bara på personens egna data.
+VALFRIA = ["grupp_prior.json"]
 
 
 def fix_bat_line_endings() -> None:
@@ -42,8 +45,9 @@ def main() -> None:
     if out.exists():
         print(f"OBS: {out.name} finns redan och skrivs över. Glömde du höja VERSION i version.py?")
     out.parent.mkdir(exist_ok=True)
+    filer = FILES + [f for f in VALFRIA if (ROOT / f).exists()]
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in FILES:
+        for f in filer:
             data = (ROOT / f).read_bytes()
             if f.endswith((".bat", ".txt")):  # Windows vill ha CRLF
                 data = data.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
