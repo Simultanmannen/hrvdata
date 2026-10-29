@@ -9,6 +9,10 @@ anpassas till hur mycket data som finns.
 Konvention: en rad gäller dygn d (allt känt före natten) och utfallet y är
 HRV natten d+1. Formen för datum d gäller alltså natten d+1.
 
+Vilopulsvägen (punkt 10b): för klockor utan HRV-status är utfallet i stället vilopulsen natten d+1
+(slag/min, högre = sämre) och nivåtermen vilopulsens 7-dygnsmedel. Samma termer i övrigt, men
+sjukflaggan bygger bara på andningen. Se `kor(utfall=...)`.
+
 Läser två tabeller:
   days(date, hrv_night, hrv_7d, rhr, respiration_avg, stress_avg, steps, ...)
   activities(date, type_key, duration_s, training_load, aerobic_te,
@@ -22,6 +26,9 @@ import numpy as np
 MODELLVERSION = "1.0"
 BASE = ['h7', 'stress', 'hour', 'smin', 'pstress', 'pload', 'load', 'sjuk']
 TOTAL = ['h7', 'hour', 'smin', 'pload', 'load', 'sjuk']   # utan stress: lastens TOTALA effekt
+# Vilopulsvägen: r7 = vilopulsens 7-dygnsmedel (slag/min) i stället för HRV-veckosnittet, i övrigt samma termer
+BASE_VP = ['r7', 'stress', 'hour', 'smin', 'pstress', 'pload', 'load', 'sjuk']
+TOTAL_VP = ['r7', 'hour', 'smin', 'pload', 'load', 'sjuk']
 HALVERINGSTIDER = [1, 2, 3, 5, 7, 10, 14, 21, 30]
 STR = {'strength_training'}
 GRUPPER = ['styrka', 'inomhuscykel', 'cykel', 'lopning', 'vandring', 'skidor', 'paddling', 'ovrigt']
@@ -77,15 +84,39 @@ def forsta_hrv(D) -> str | None:
     return ds[0] if ds else None
 
 
+def forsta_vilopuls(D) -> str | None:
+    ds = [d for d in sorted(D) if D[d]['rhr'] is not None]
+    return ds[0] if ds else None
+
+
+def vilopuls_7d(D, minn=4) -> dict:
+    """Vilopulsens medel över nätterna d−6 … d (natten mot d räknas med, som Garmins HRV-veckosnitt).
+    Minst `minn` nätter med värde, annars saknas nivån det dygnet."""
+    v = {ordn(d): D[d]['rhr'] for d in D if D[d]['rhr'] is not None}
+    out = {}
+    for d in D:
+        o = ordn(d)
+        x = [v[o - k] for k in range(7) if o - k in v]
+        if len(x) >= minn:
+            out[d] = float(np.mean(x))
+    return out
+
+
 # ----------------------------------------------------------------- sjukindex (sjuk_ren.py)
-def sjukindex(D, A, start: str, somn: bool = False) -> dict:
+def sjukindex(D, A, start: str, somn: bool = False, bara_andning: bool = False) -> dict:
     """Renskuret fysiologiskt sjukindex: robust z av vilopuls- och andningsavvikelse mot
     60 dygns median bakåt, residualiserat mot aktivitetsminuter och last (idag + igår).
 
     somn=True (variant 2, punkt 5): residualiseras även mot nattens sömnlängd (natten som slutar på
     morgonen, samma natt som vilopulsen) och mot en indikator för pass utan last (t.ex. fridykning,
     andningsövningar), så att en störd natt (barn, sen kväll) eller en träningsdag utan last inte tas
-    för sjukdom. Basmodellen använder somn=False."""
+    för sjukdom. Basmodellen använder somn=False.
+
+    bara_andning=True (vilopulsvägen, punkt 10b): bara andningens avvikelse. När vilopulsen är utfallet
+    kan den inte också ligga i en prediktor, för då förklarar natten sig själv: en hög vilopuls natten
+    d+1 skulle ge sjukflagga och flaggan skulle "förutsäga" samma höga vilopuls. Andningen mäts som
+    en egen storhet och flaggan kräver minst två dygn över tröskeln, så den fångar sjukperioder men
+    inte enstaka nätters vilopulssvängningar. Saknar klockan andning blir det ingen sjukflagga alls."""
     dts = sorted(D)
 
     def trailing(key, win=60, minn=15):
@@ -105,6 +136,10 @@ def sjukindex(D, A, start: str, somn: bool = False) -> dict:
     rec = []
     for d in dts:
         r = D[d]
+        if bara_andning:
+            if r['respiration_avg'] is not None and d in base_res:
+                rec.append((d, 0.0, r['respiration_avg'] - base_res[d]))
+            continue
         if r['rhr'] is None or r['respiration_avg'] is None:
             continue
         if d not in base_rhr or d not in base_res:
@@ -118,7 +153,7 @@ def sjukindex(D, A, start: str, somn: bool = False) -> dict:
         spr = np.percentile(v, 84) - np.percentile(v, 16)
         return (v - np.median(v)) / spr * 2 if spr > 0 else np.zeros_like(v)
 
-    idx = z(drhr) + z(dres)
+    idx = z(dres) if bara_andning else z(drhr) + z(dres)
     sidx = {x[0]: float(v) for x, v in zip(rec, idx)}
 
     mins, load = {}, {}
@@ -199,7 +234,12 @@ def day_feats(A, d):
     return f
 
 
-def bygg_rader(D, A, start: str, sjuk: set) -> list[dict]:
+def bygg_rader(D, A, start: str, sjuk: set, utfall: str = 'hrv') -> list[dict]:
+    """utfall='vilopuls': y = vilopulsen natten d+1 och nivåtermen r7 = vilopulsens 7-dygnsmedel
+    (i stället för y = HRV och h7). Alla andra kolumner är desamma."""
+    vp = utfall == 'vilopuls'
+    r7 = vilopuls_7d(D) if vp else None
+    niva_namn = 'r7' if vp else 'h7'
     rows = []
     for d in sorted(D):
         if d < start:
@@ -208,17 +248,17 @@ def bygg_rader(D, A, start: str, sjuk: set) -> list[dict]:
         n1, p1 = iso(o + 1), iso(o - 1)
         if n1 not in D:
             continue
-        y = D[n1]['hrv_night']
+        y = D[n1]['rhr'] if vp else D[n1]['hrv_night']
         if y is None:
             continue
-        h7, s = D[d]['hrv_7d'], D[d]['stress_avg']
+        h7, s = (r7.get(d) if vp else D[d]['hrv_7d']), D[d]['stress_avg']
         if h7 is None or s is None or s < 0:
             continue
         f, fp = day_feats(A, d), day_feats(A, p1)
         ps = D[p1]['stress_avg'] if p1 in D and D[p1]['stress_avg'] is not None else None
         r = dict(
             date=d, ord=o, y=float(y),
-            h7=float(h7), stress=float(s),
+            **{niva_namn: float(h7)}, stress=float(s),
             ate=f['ate'], ante=f['ante'], load=f['load'], smin=f['smin'], emin=f['emin'], lmin=f['lmin'],
             hour=f['hour'] if f['hour'] == f['hour'] else 12.0,
             nact=f['n'], pate=fp['ate'], pload=fp['load'],
@@ -239,8 +279,9 @@ def bygg_rader(D, A, start: str, sjuk: set) -> list[dict]:
 class Kedja:
     """Expanderande fönster: varje dygns prognos bygger bara på strikt tidigare dygn."""
 
-    def __init__(self, rows, t0=None):
+    def __init__(self, rows, t0=None, spec=BASE):
         self.rows = rows
+        self.spec = spec          # BASE för HRV, BASE_VP för vilopulsvägen
         self.d = {k: np.array([r[k] for r in rows], float) for k in rows[0] if k != 'date'}
         self.dates = [r['date'] for r in rows]
         self.y = self.d['y']
@@ -279,7 +320,7 @@ class Kedja:
 
     def residualer(self, p0):
         T0, y = self.t0, self.y
-        Xf = self.design(BASE, np.arange(self.N))
+        Xf = self.design(self.spec, np.arange(self.N))
         bf, *_ = np.linalg.lstsq(Xf[:T0], y[:T0], rcond=None)
         res = np.empty(self.N)
         res[:T0] = y[:T0] - Xf[:T0] @ bf
@@ -402,7 +443,7 @@ def lang_last(K, A, form) -> dict:
       - tröskel: + max(last − knut, 0), last över knuten får en egen lutning, knutar ur egna percentiler
     BASE-specen ändras inte; det här är jämförelser vid sidan av."""
     y, N, t0 = K.y, K.N, K.t0
-    Xb = K.design(BASE, np.arange(N))
+    Xb = K.design(K.spec, np.arange(N))
     pb, mb = expanding_snabb(Xb, y, t0)
     pf, mf = expanding_snabb(np.column_stack([Xb, form]), y, t0)
     r2_bas, r2_form = K.r2(pb, mb), K.r2(pf, mf)
@@ -452,7 +493,7 @@ def lang_last(K, A, form) -> dict:
         hinge = np.maximum(last - k, 0.0)
         b, se, _ = ols(np.column_stack([Xb, form, hinge]), y)
         troskel = {"knut": k, "r2_med_form": v, "vinst_mot_form": v - r2_form,
-                   "under_knut": {"b": float(b[BASE.index('load') + 1]), "se": float(se[BASE.index('load') + 1])},
+                   "under_knut": {"b": float(b[K.spec.index('load') + 1]), "se": float(se[K.spec.index('load') + 1])},
                    "over_knut_extra": {"b": float(b[-1]), "se": float(se[-1])},
                    "n_over": int((hinge > 0).sum()), "skanning": tskan}
     return {"r2_bas": r2_bas, "r2_form": r2_form, "banister": banister, "troskel": troskel}
@@ -542,7 +583,7 @@ def minut_variant(K, form) -> dict:
       - lmin: minuter i lågintensiva pass (last per minut < LAGINT)
     Utöver basmodellen och utöver basmodellen med form, ut ur stickprovet på samma dygn."""
     y, N, t0 = K.y, K.N, K.t0
-    Xb = K.design(BASE, np.arange(N))
+    Xb = K.design(K.spec, np.arange(N))
 
     def r2(M):
         p, m = expanding_snabb(M, y, t0)
@@ -566,17 +607,41 @@ def minut_variant(K, form) -> dict:
 
 # ----------------------------------------------------------------- hela körningen
 def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None,
-        progress=None) -> dict:
+        progress=None, utfall: str | None = None) -> dict:
     """Kör kedjan. Returnerar en dict med serier (för dashboarden) och nyckeltal (för bidraget).
-    Vid för lite data: {'ok': False, 'skal': ...}."""
+    Vid för lite data: {'ok': False, 'skal': ...}.
+
+    utfall: 'hrv', 'vilopuls' eller None. None väljer själv: HRV när det räcker till modellen, annars
+    vilopulsen om klockan mätt den tillräckligt länge (punkt 10b: klockor utan HRV-status, eller en ny
+    klocka med kort HRV-historik). Resultatet har R['utfall'] och R['enhet'] ('ms' eller 'slag/min')."""
     tick = progress or (lambda *_: None)
     D, A = las(con)
-    first = forsta_hrv(D)
+    if utfall is not None:
+        return _kor(D, A, start, t0, tick, utfall)
+    R = _kor(D, A, start, t0, tick, 'hrv')
+    if R['ok']:
+        return R
+    Rv = _kor(D, A, start, t0, tick, 'vilopuls')
+    if Rv['ok']:
+        Rv['varfor_vilopuls'] = R['skal']
+        return Rv
+    if R.get('saknar_hrv_status'):
+        R['skal'] += (' Modellen kan i stället räknas på vilopulsen när det finns minst '
+                      f'{MIN_RADER} dygn med vilopuls och stress. Nu finns {Rv.get("n", 0)}.')
+    return R
+
+
+def _kor(D, A, start, t0, tick, utfall) -> dict:
+    vp = utfall == 'vilopuls'
+    spec, total = (BASE_VP, TOTAL_VP) if vp else (BASE, TOTAL)
+    first = forsta_vilopuls(D) if vp else forsta_hrv(D)
     if first is None:
+        if vp:
+            return {'ok': False, 'n': 0, 'skal': 'Ingen vilopuls i databasen ännu.'}
         n_rhr = sum(1 for v in D.values() if v['rhr'] is not None)
         if n_rhr >= 30:
             # Vilopuls finns men ingen HRV: klockan saknar troligen HRV-status (punkt 10)
-            return {'ok': False, 'skal': (
+            return {'ok': False, 'saknar_hrv_status': True, 'skal': (
                 f'Klockan har mätt vilopuls {n_rhr} nätter men ingen nattlig HRV. Den saknar troligen '
                 'HRV-status, till exempel Venu Sq, Venu 2 (inte Plus), Vivoactive 4, Vivosmart 5, Fenix 6 eller '
                 'äldre Forerunner. Se listan i LÄSMIG. Vilopuls, sömn, stress och träning visas ändå under '
@@ -584,24 +649,26 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
         return {'ok': False, 'skal': 'Ingen nattlig HRV i databasen ännu.'}
     start = max(start or first, first)
     tick('Sjukindex', 0.05)
-    sidx = sjukindex(D, A, start)
+    # Vilopulsvägen: sjukflaggan bara ur andningen (vilopulsen är ju utfallet, se sjukindex)
+    sidx = sjukindex(D, A, start, bara_andning=vp)
     sjuk = fys_ep(sidx) if sidx else set()
-    rows = bygg_rader(D, A, start, sjuk)
+    rows = bygg_rader(D, A, start, sjuk, utfall)
     if len(rows) < MIN_RADER:
+        vad = 'vilopuls, stress och vilopulsens veckosnitt' if vp else 'HRV, stress och HRV-veckosnitt'
         return {'ok': False, 'n': len(rows),
-                'skal': f'{len(rows)} användbara dygn med HRV, stress och HRV-veckosnitt. '
+                'skal': f'{len(rows)} användbara dygn med {vad}. '
                         f'Modellen behöver minst {MIN_RADER}, helst 400 eller fler.'}
 
-    K = Kedja(rows, t0)
+    K = Kedja(rows, t0, spec)
     tick('Basmodellen', 0.10)
-    p0, m0 = K.expanding(BASE)
+    p0, m0 = K.expanding(spec)
     res = K.residualer(p0)
 
     scan, best = {}, None
     for i, hl in enumerate(HALVERINGSTIDER):
         tick(f'Långsam form, halveringstid {hl} d', 0.15 + 0.6 * i / len(HALVERINGSTIDER))
         f = K.ewma_feature(res, hl)
-        p, m = K.expanding(BASE, extra=[f])
+        p, m = K.expanding(spec, extra=[f])
         v = K.r2(p, m)
         scan[hl] = v
         if best is None or v > best[1]:
@@ -609,30 +676,32 @@ def kor(con: sqlite3.Connection, start: str | None = None, t0: int | None = None
     hl, r2_form, form, p_form, m_form = best
 
     tick('Jämförelser', 0.8)
-    utan_h7 = [k for k in BASE if k != 'h7']
+    utan_h7 = spec[1:]     # utan nivåtermen (h7 eller r7)
     p_nh7, m_nh7 = K.expanding(utan_h7)
     p_nh7f, m_nh7f = K.expanding(utan_h7, extra=[form])
 
     # Helsample-koefficienter i slutmodellen (direkt effekt) och utan stress (total effekt)
     N = K.N
-    Xs = np.column_stack([np.ones(N)] + [K.d[k] for k in BASE] + [form])
+    Xs = np.column_stack([np.ones(N)] + [K.d[k] for k in spec] + [form])
     b, se, n_ols = ols(Xs, K.y)
-    koef = {k: {'b': float(b[i + 1]), 'se': float(se[i + 1])} for i, k in enumerate(BASE + ['form'])}
-    Xt = np.column_stack([np.ones(N)] + [K.d[k] for k in TOTAL] + [form])
+    koef = {k: {'b': float(b[i + 1]), 'se': float(se[i + 1])} for i, k in enumerate(spec + ['form'])}
+    Xt = np.column_stack([np.ones(N)] + [K.d[k] for k in total] + [form])
     bt, set_, _ = ols(Xt, K.y)
-    koef_total = {k: {'b': float(bt[i + 1]), 'se': float(set_[i + 1])} for i, k in enumerate(TOTAL + ['form'])}
-    suff = {'direkt': tillracklig(Xs, K.y, BASE + ['form']), 'total': tillracklig(Xt, K.y, TOTAL + ['form'])}
+    koef_total = {k: {'b': float(bt[i + 1]), 'se': float(set_[i + 1])} for i, k in enumerate(total + ['form'])}
+    suff = {'direkt': tillracklig(Xs, K.y, spec + ['form']), 'total': tillracklig(Xt, K.y, total + ['form'])}
 
     tick('Lång lastlagg', 0.85)
     ll = lang_last(K, A, form)
     tick('Sömn', 0.88)
-    sv = somn_variant(K, D, A, form, start)
+    # Sömnvarianten bygger på sjukindex 2 med vilopulsen, så den räknas bara för HRV
+    sv = None if vp else somn_variant(K, D, A, form, start)
     mv = minut_variant(K, form)
     tick('Nyckeltal', 0.9)
     ext = extra_nyckeltal(K, D, A, form, res, sjuk, start)
     tick('Klart', 1.0)
     return {
-        'ok': True, 'start': start, 't0': K.t0, 'n': N, 'dates': K.dates, 'rows': rows,
+        'ok': True, 'utfall': utfall, 'enhet': 'slag/min' if vp else 'ms', 'spec': spec,
+        'start': start, 't0': K.t0, 'n': N, 'dates': K.dates, 'rows': rows,
         'y': K.y, 'pred_base': p0, 'pred_form': p_form, 'res': res, 'form': form, 'hl': hl,
         'sjuk': sorted(sjuk),
         'r2': {'bas': K.r2(p0, m0), 'form': r2_form, 'utan_h7': K.r2(p_nh7, m_nh7),
@@ -664,7 +733,7 @@ def extra_nyckeltal(K, D, A, form, res, sjuk, start) -> dict:
 
     # Tunga pass: dygn med last över egen 90:e percentil (bland passdygn), modellfritt.
     # Avvikelse = HRV natten efter − 7-dygnssnittet, jämfört med vilodygn.
-    dev = y - d['h7']
+    dev = y - d[K.spec[0]]     # mot nivåtermen: HRV-veckosnittet, eller vilopulsens 7-dygnsmedel
     pass_load = d['load'][d['load'] > 0]
     tung = None
     if len(pass_load) >= 30:
@@ -719,8 +788,10 @@ def extra_nyckeltal(K, D, A, form, res, sjuk, start) -> dict:
     alla_last = np.array([load_d.get(x, 0.0) for x in sd if x >= start])
     typmin = {g: float(d['M_' + g].sum()) for g in GRUPPER}
     tot = sum(typmin.values()) or 1.0
+    vp = K.spec is BASE_VP
     out['beskrivning'] = {
-        'hrv_medel': float(y.mean()), 'hrv_sd': float(y.std(ddof=1)),
+        ('vilopuls_medel' if vp else 'hrv_medel'): float(y.mean()),
+        ('vilopuls_sd' if vp else 'hrv_sd'): float(y.std(ddof=1)),
         'stress_medel': float(d['stress'].mean()), 'stress_sd': float(d['stress'].std(ddof=1)),
         'last_per_dygn': float(alla_last.mean()) if len(alla_last) else None,
         'andel_passdygn': float((d['load'] > 0).mean()),
@@ -730,6 +801,7 @@ def extra_nyckeltal(K, D, A, form, res, sjuk, start) -> dict:
         'dygn_i_serien': int(K.o[-1] - K.o[0] + 1),
         'startar': start[:7],
         'sjukindex_finns': bool(sjuk) or any(D[x]['respiration_avg'] is not None for x in sd),
+        **({'sjukindex': 'andning'} if vp else {}),
     }
     return out
 
@@ -737,13 +809,17 @@ def extra_nyckeltal(K, D, A, form, res, sjuk, start) -> dict:
 if __name__ == '__main__':
     import sys
     import time
-    path = sys.argv[1] if len(sys.argv) > 1 else 'data/hrv.db'
-    start = sys.argv[2] if len(sys.argv) > 2 else None
+    arg = [a for a in sys.argv[1:] if not a.startswith('--')]
+    path = arg[0] if arg else 'data/hrv.db'
+    start = arg[1] if len(arg) > 1 else None
     t = time.time()
-    R = kor(sqlite3.connect(path), start=start, progress=lambda s, f: print(f'  [{f:4.0%}] {s}', flush=True))
+    R = kor(sqlite3.connect(path), start=start, progress=lambda s, f: print(f'  [{f:4.0%}] {s}', flush=True),
+            utfall='vilopuls' if '--vilopuls' in sys.argv else None)
     if not R['ok']:
         print(R['skal'])
         sys.exit(1)
+    if R['utfall'] != 'hrv':
+        print(f"UTFALL: {R['utfall']} ({R['enhet']}, högre = sämre)", R.get('varfor_vilopuls', ''))
     print(f"rader {R['n']}  {R['dates'][0]} -> {R['dates'][-1]}  T0 {R['t0']}  ({time.time() - t:.1f} s)")
     print(f"OOS R2 bas {R['r2']['bas']:.4f}  +form {R['r2']['form']:.4f}  "
           f"utan h7 {R['r2']['utan_h7']:.4f}  utan h7 +form {R['r2']['utan_h7_form']:.4f}")
@@ -762,16 +838,16 @@ if __name__ == '__main__':
           f"({bn['vinst_mot_form']:+.4f} mot form)  fitness {bn['fitness']['b']:+.4f} (t {bn['fitness']['b'] / bn['fitness']['se']:+.1f})  "
           f"trötthet {bn['trotthet']['b']:+.4f} (t {bn['trotthet']['b'] / bn['trotthet']['se']:+.1f})")
     S = R['somn']
-    print(f"sömnvariant: R² {', '.join(f'{k} {v:.4f}' for k, v in S['r2'].items())}")
+    if S: print(f"sömnvariant: R² {', '.join(f'{k} {v:.4f}' for k, v in S['r2'].items())}")
     kt = lambda k, e: "saknas" if not k else f"{k['b']:+.2f} {e} (t {k['b'] / k['se']:+.1f})"
-    print(f"  vinst mot form {S['vinst_mot_form']:+.4f}, utan h7 {S['vinst_utan_h7']:+.4f} | sömn {kt(S['somn_per_h'], 'ms/h')}, "
+    if S: print(f"  vinst mot form {S['vinst_mot_form']:+.4f}, utan h7 {S['vinst_utan_h7']:+.4f} | sömn {kt(S['somn_per_h'], 'ms/h')}, "
           f"vaken {kt(S['vaken_per_10min'], 'ms/10 min')} | sjukflagga {S['andel_sjuk1']:.1%} → "
           f"{S['andel_sjuk2']:.1%}, kvar {S['sjuk1_kvar_i_sjuk2']:.0%} | pass utan last {S['pass_utan_last_dygn']} dygn")
     M = R['minuter']
     for k, lab in (("emin", "alla uthållighetsminuter"), ("lmin", "lågintensiva minuter")):
         v = M[k]
         print(f"minutvariant {lab}: " + ("för få dygn" if not v else
-              f"{v['per_timme']['b']:+.2f} ms/h (t {v['per_timme']['b'] / v['per_timme']['se']:+.1f}), "
+              f"{v['per_timme']['b']:+.2f} {R['enhet']}/h (t {v['per_timme']['b'] / v['per_timme']['se']:+.1f}), "
               f"vinst mot bas {v['vinst_mot_bas']:+.4f}, mot form {v['vinst_mot_form']:+.4f}"))
     if M['andel_lagint_min'] is not None:
         print(f"  lågintensivt: {M['andel_lagint_min']:.1%} av uthållighetsminuterna, {M['dygn_med_lagint']} dygn")

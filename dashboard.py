@@ -525,15 +525,35 @@ def hrv_chart(days, mf, height=380):
     return style(fig, height, title="Nattlig HRV (ms)")
 
 
-def form_chart(mf, height=300, title="Långsam form (ms)"):
+def vilopuls_chart(days, mf, height=380):
+    """Vilopulsvägen (punkt 10b): samma diagram som hrv_chart, med vilopulsen och dess 7-dygnsmedel."""
+    fig = go.Figure()
+    fig.add_scatter(x=days["datum"], y=days["rhr"], mode="markers", name="Natt",
+                    marker=dict(size=5, color=C_HRV, opacity=.55),
+                    hovertemplate="%{y:.0f} slag/min<extra>natt</extra>")
+    fig.add_scatter(x=days["datum"], y=days["rhr_7d"], mode="lines", name="7-dygnsmedel",
+                    line=dict(color=C_7D, width=2), hovertemplate="%{y:.1f} slag/min<extra>7 dygn</extra>")
+    if mf is not None and not mf.empty:
+        fig.add_scatter(x=mf["datum"], y=mf["pred"], mode="lines", name="Modellens förväntan",
+                        line=dict(color=C_PRED, width=1.5, dash="dot"),
+                        hovertemplate="%{y:.1f} slag/min<extra>förväntat</extra>")
+    return style(fig, height, title="Vilopuls i sömnen (slag/min)")
+
+
+def form_chart(mf, height=300, title=None):
+    # Vilopulsvägen: formen är i slag/min och positivt är sämre, så färgerna byter plats
+    enh = ENH.strip()
+    title = title or f"Långsam form ({enh})"
+    upp, ned = (C_NEG, C_POS) if VP else (C_POS, C_NEG)
+    fupp, fned = ("rgba(227,73,72,.30)", "rgba(27,175,122,.35)") if VP else ("rgba(27,175,122,.35)", "rgba(227,73,72,.30)")
     fig = go.Figure()
     pos, neg = mf["form"].clip(lower=0), mf["form"].clip(upper=0)
-    fig.add_scatter(x=mf["datum"], y=pos, fill="tozeroy", mode="lines", line=dict(width=0, color=C_POS),
-                    fillcolor="rgba(27,175,122,.35)", hoverinfo="skip", showlegend=False)
-    fig.add_scatter(x=mf["datum"], y=neg, fill="tozeroy", mode="lines", line=dict(width=0, color=C_NEG),
-                    fillcolor="rgba(227,73,72,.30)", hoverinfo="skip", showlegend=False)
+    fig.add_scatter(x=mf["datum"], y=pos, fill="tozeroy", mode="lines", line=dict(width=0, color=upp),
+                    fillcolor=fupp, hoverinfo="skip", showlegend=False)
+    fig.add_scatter(x=mf["datum"], y=neg, fill="tozeroy", mode="lines", line=dict(width=0, color=ned),
+                    fillcolor=fned, hoverinfo="skip", showlegend=False)
     fig.add_scatter(x=mf["datum"], y=mf["form"], mode="lines", line=dict(color=INK2, width=1.2),
-                    hovertemplate="%{y:+.1f} ms<extra>form</extra>", showlegend=False)
+                    hovertemplate=f"%{{y:+.1f}} {enh}<extra>form</extra>", showlegend=False)
     fig.add_hline(y=0, line_color=MUTED, line_width=1)
     return style(fig, height, title=title)
 
@@ -572,7 +592,9 @@ with st.sidebar:
     else:
         sync_clicked = False
         st.caption("Inte inloggad mot Garmin eller Oura – se fliken Data & konto.")
-    st.caption(f"{days_all['hrv_night'].notna().sum()} nätter med HRV · {len(acts_all)} pass · version {VERSION}")
+    _n_hrv = days_all['hrv_night'].notna().sum()
+    st.caption((f"{_n_hrv} nätter med HRV" if _n_hrv else f"{days_all['rhr'].notna().sum()} nätter med vilopuls")
+               + f" · {len(acts_all)} pass · version {VERSION}")
 if sync_clicked:
     start_sync(incremental_days(days_all))
 
@@ -588,6 +610,13 @@ with st.spinner("Räknar modellen …"):
     R = run_model(v)
 mf_all = model_frame(R) if R.get("ok") else None
 mf = mf_all[mf_all["datum"] >= d0] if mf_all is not None else None
+# Vilopulsvägen (punkt 10b): klockan saknar HRV, utfallet är vilopulsen i slag/min och högre är sämre
+VP = bool(R.get("ok")) and R.get("utfall") == "vilopuls"
+ENH = " slag/min" if VP else " ms"
+if VP:
+    _r7 = modell.vilopuls_7d({r.date: {"rhr": None if pd.isna(r.rhr) else r.rhr} for r in days_all.itertuples()})
+    days_all["rhr_7d"] = days_all["date"].map(_r7)
+    days = days_all[days_all["datum"] >= d0]
 
 tab_over, tab_dos, tab_plan, tab_form, tab_health, tab_train, tab_table, tab_bidra, tab_data = st.tabs(
     ["Översikt", "Dos–respons", "Planera veckan", "Långsam form", "Hälsa", "Träning", "Tabell", "Bidra",
@@ -602,15 +631,26 @@ _con.close()
 
 # ------------------------------------------------------------------ översikt
 with tab_over:
-    hv = days_all.dropna(subset=["hrv_night"])
+    if VP:
+        st.info("**Din klocka mäter inte nattlig HRV**, eller har gjort det för kort tid. Modellen räknas därför "
+                "på vilopulsen i sömnen i stället. Allt nedan är i slag per minut, och **högre vilopuls är sämre**: "
+                "ett pass som kostar syns som ett plus natten efter.")
+    hv = days_all.dropna(subset=["rhr" if VP else "hrv_night"])
     last = hv.iloc[-1] if not hv.empty else None
     c = st.columns(6)
-    if last is not None:
+    if last is not None and VP:
+        c[0].metric(f"Vilopuls senaste natten ({sv(last['datum'])})", fmt(last["rhr"], 0, unit=" slag/min"),
+                    None if pd.isna(last["rhr_7d"]) else delta(last["rhr"] - last["rhr_7d"], 1, " mot 7 dygn"),
+                    delta_color="inverse")
+        c[1].metric("Vilopuls 7-dygnsmedel", fmt(last["rhr_7d"], 1, unit=" slag/min"))
+    elif last is not None:
         c[0].metric(f"HRV senaste natten ({sv(last['datum'])})", fmt(last["hrv_night"], 0, unit=" ms"),
                     None if pd.isna(last["hrv_7d"]) else delta(last["hrv_night"] - last["hrv_7d"], 0, " ms mot 7 dygn"))
         c[1].metric("HRV 7-dygnssnitt", fmt(last["hrv_7d"], 0, unit=" ms"))
-    lr = days_all.dropna(subset=["rhr"])
-    if not lr.empty:
+    lr = days_all.dropna(subset=["respiration_avg" if VP else "rhr"])
+    if not lr.empty and VP:
+        c[2].metric("Andning i sömn", fmt(lr.iloc[-1]["respiration_avg"], 1, unit=" /min"))
+    elif not lr.empty:
         c[2].metric("Vilopuls", fmt(lr.iloc[-1]["rhr"], 0, unit=" slag/min"))
     ls = days_all.dropna(subset=["sleep_seconds"])
     if not ls.empty:
@@ -623,26 +663,29 @@ with tab_over:
                     help="Garmins dagssnitt. Ett dygn som hämtades innan det var slut är ofullständigt och "
                          "fylls på vid nästa hämtning." if partial else None)
     if mf_all is not None:
-        c[5].metric("Långsam form", fmt(mf_all["form"].iloc[-1], 1, True, " ms"),
+        c[5].metric("Långsam form", fmt(mf_all["form"].iloc[-1], 1, True, ENH),
                     help="Ett tillstånd som modellen ser i hur dina nätter avviker från det väntade de senaste "
-                         "dagarna. Positivt = kroppen ligger bättre till än vad träning och stress förklarar.")
+                         "dagarna. " + ("Positivt = vilopulsen ligger högre (sämre) än vad träning och stress "
+                                        "förklarar." if VP else
+                                        "Positivt = kroppen ligger bättre till än vad träning och stress förklarar."))
 
     if mf_all is not None and last is not None:
         lastrow = mf_all.iloc[-1]
         diff = lastrow["hrv"] - lastrow["pred"]
         if np.isfinite(diff):
             word = "över" if diff > 0 else "under"
-            st.caption(f"Natten mot {sv(lastrow['datum'])} landade {fmt(abs(diff), 0)} ms {word} vad modellen "
-                       f"väntade sig ({fmt(lastrow['pred'], 0)} ms) utifrån gårdagens träning, stress och form. "
-                       f"Modellens typiska fel är {fmt(R['mae']['form'], 1)} ms.")
-    st.plotly_chart(hrv_chart(days, mf), width="stretch")
+            nd = 1 if VP else 0
+            st.caption(f"Natten mot {sv(lastrow['datum'])} landade {fmt(abs(diff), nd)}{ENH} {word} vad modellen "
+                       f"väntade sig ({fmt(lastrow['pred'], nd)}{ENH}) utifrån gårdagens träning, stress och form. "
+                       f"Modellens typiska fel är {fmt(R['mae']['form'], 1)}{ENH}.")
+    st.plotly_chart(vilopuls_chart(days, mf) if VP else hrv_chart(days, mf), width="stretch")
     if mf is not None and not mf.empty:
         st.plotly_chart(form_chart(mf, 240), width="stretch")
     elif not R.get("ok"):
         st.info(R.get("skal", "Modellen kan inte räknas än."))
 
 # ------------------------------------------------------------------ dos–respons
-REF = referens()
+REF = None if VP else referens()   # referensen är Johans HRV-serie och går inte att jämföra med vilopuls
 
 
 def koefrad(namn, beskr, key, skala, enhet, total=False):
@@ -657,9 +700,110 @@ def koefrad(namn, beskr, key, skala, enhet, total=False):
             "Ursprungsserien": fmt(rk["b"] * skala, 2, True, enhet) if rk else "–"}
 
 
+def dos_vilopuls():
+    """Dos–respons för vilopulsvägen (punkt 10b). Samma upplägg som HRV-versionen men i slag/min,
+    och tecknen är omvända: en kostnad är ett plus."""
+    if data_source == "oura":
+        st.caption("Oura-data: *träningslast* = passets minuter × intensitet (lätt 0,5 / måttlig 1 / hård 2). "
+                   "*Dagsstress* = minuter med hög stress enligt Oura.")
+    st.markdown("#### Vad kostar det i natt?")
+    kt, kd = R["koef_total"]["load"], R["koef"]["load"]
+    tp = R["tungt_pass"]
+    c = st.columns(4)
+    c[0].metric("Pass med träningslast 100", fmt(kt["b"] * 100, 2, True, " slag/min"),
+                help="Hur mycket högre vilopuls natten efter ett pass med träningslast 100, allt annat lika. "
+                     "Plus betyder att passet kostar. Total effekt: inklusive den del som går via att passet höjer "
+                     "dagens stressvärde.")
+    c[1].metric("…varav utöver stressavtrycket", fmt(kd["b"] * 100, 2, True, " slag/min"),
+                help="Samma sak, men när dagens stress hålls konstant.")
+    c[2].metric("En stressenhet över ditt vanliga", fmt(R["koef"]["stress"]["b"], 2, True, " slag/min"),
+                help="Garmins dagsstress. Talet är en prognos från dagsmedlet, som också räknar stressen under "
+                     "sömnen fram till uppvaknandet.")
+    if tp:
+        n2 = "" if tp["natt2"] is None else f" Natten därpå: {fmt(tp['natt2'], 1, True, ' slag/min')}."
+        c[3].metric(f"Tungt pass (last ≥ {tp['grans_last']:.0f})", fmt(tp["natt1"], 1, True, " slag/min"),
+                    help=f"Modellfritt: dina {tp['n']} tyngsta passdygn (översta tiondelen) mot vilodygn. "
+                         f"Vilopulsen natten efter jämfört med 7-dygnsmedlet.{n2}")
+        if n2:
+            c[3].caption(n2.strip())
+
+    left, right = st.columns([1.1, 1], gap="large")
+    with left:
+        kl = pd.DataFrame(R["lastklasser"])
+        if not kl.empty:
+            kl["klass"] = [("Vila" if r.till == 0 else (f"{r.fran}–{r.till}" if r.till < 10 ** 5 else f"{r.fran}+"))
+                           for r in kl.itertuples()]
+            fig = go.Figure(go.Bar(x=kl["klass"], y=kl["avvikelse"], marker_color=C_HRV, customdata=kl["n"],
+                                   hovertemplate="%{y:+.2f} slag/min<br>%{customdata} dygn<extra></extra>"))
+            fig.add_hline(y=0, line_color=MUTED, line_width=1)
+            style(fig, 320, title="Vilopuls natten efter mot 7-dygnsmedlet, per träningslast (slag/min)",
+                  xaxis_title="Dagens träningslast", hovermode="closest")
+            st.plotly_chart(fig, width="stretch")
+            st.caption("Rakt ur datan, utan modell. Sjukdygn är borttagna. Högre stapel = högre vilopuls = sämre.")
+    with right:
+        sc = R["scan"]
+        fig = go.Figure(go.Scatter(x=list(sc), y=list(sc.values()), mode="lines+markers",
+                                   line=dict(color=C_7D), hovertemplate="%{x} dygn: R² %{y:.3f}<extra></extra>"))
+        fig.add_hline(y=R["r2"]["bas"], line_dash="dot", line_color=MUTED,
+                      annotation_text="utan form", annotation_position="bottom right")
+        style(fig, 320, title="Hur mycket formen tillför, per halveringstid", xaxis_title="Halveringstid (dygn)",
+              yaxis_title="R² ut ur stickprovet", hovermode="closest")
+        fig.update_xaxes(type="log", tickvals=list(sc))
+        st.plotly_chart(fig, width="stretch")
+
+    st.markdown("#### Modellen")
+    c = st.columns(4)
+    c[0].metric("Förklarad variation, utan form", fmt(R["r2"]["bas"] * 100, 0, unit=" %"),
+                help="R² ut ur stickprovet: varje natt förutsägs med en modell som bara sett tidigare nätter.")
+    c[1].metric("…med den långsamma formen", fmt(R["r2"]["form"] * 100, 0, unit=" %"),
+                delta((R["r2"]["form"] - R["r2"]["bas"]) * 100, 1, " procentenheter"))
+    c[2].metric("Typiskt fel", fmt(R["mae"]["form"], 1, unit=" slag/min"))
+    c[3].metric("Dygn i modellen", f"{R['n']}",
+                help=f"Förklarad variation och typiskt fel är prognoser för de sista {R['n_utv']} dygnen.")
+    e = " slag/min"
+    rows = [
+        koefrad("Träningslast (total)", "per 100 enheter, natten efter", "load", 100, e, total=True),
+        koefrad("Träningslast (direkt)", "per 100 enheter, utöver stressavtrycket", "load", 100, e),
+        koefrad("Dagsstress", "per enhet stress samma dag", "stress", 1, e),
+        koefrad("Gårdagens stress", "per enhet, dagen före", "pstress", 1, e),
+        koefrad("Gårdagens last", "per 100 enheter, dagen före", "pload", 100, e),
+        koefrad("Styrka", "per 10 minuter styrketräning", "smin", 10, e),
+        koefrad("Sen träning", "per timme senare start på dagens sista pass", "hour", 1, e),
+        koefrad("Sjuk", "dygn då andningen i sömnen är förhöjd", "sjuk", 1, e),
+        koefrad("7-dygnsmedel", "per slag/min i vilopulsens 7-dygnsmedel", "r7", 1, e),
+        koefrad("Långsam form", "per slag/min i formen", "form", 1, e),
+    ]
+    st.dataframe(pd.DataFrame(rows).drop(columns="Ursprungsserien"), hide_index=True, width="stretch")
+    st.caption("Plus betyder högre vilopuls natten efter, alltså en kostnad. Minus betyder lägre vilopuls.")
+    nv = R["nedvarvning"]
+    if nv:
+        st.caption(f"Nedvarvning: dagen efter ett pass med last 100 ligger din dagsstress "
+                   f"{fmt(nv['b_igar'] * 100, 2, True)} enheter mot ditt 28-dygnssnitt "
+                   f"(t {fmt(nv['b_igar'] / nv['se_igar'], 1, True)}). Negativt betyder att kroppen går "
+                   "tystare dagen efter ett hårt pass.")
+    with st.expander("Hur modellen räknar"):
+        st.markdown(f"""
+Vilopulsen natten efter dygn *d* förklaras av det som är känt före natten: vilopulsens medel de senaste
+sju nätterna, dagens och gårdagens stress, dagens och gårdagens träningslast, minuter styrketräning, när på
+dagen sista passet startade och om dygnet ser ut som ett sjukdygn. Allt är linjärt.
+
+**Sjukdygnen** hittas bara med andningen i sömnen (över din egen 60-dygnsmedian minst två dygn i rad).
+Vilopulsen kan inte vara med i den bedömningen, eftersom det är vilopulsen modellen ska förutsäga. Saknar
+klockan andning finns ingen sjukflagga, och då kan en förkylning se ut som en dyr vilodag.
+
+**Ingen framtid läcker in.** Varje natt från dygn {R['t0']} och framåt förutsägs med en modell som bara
+har sett tidigare dygn (expanderande fönster).
+
+**Den långsamma formen** är ett glidande medel av modellens tidigare missar, med den halveringstid som
+förutsäger bäst ({R['hl']} dygn för dig). Positiv form betyder att vilopulsen ligger högre än väntat.
+""")
+
+
 with tab_dos:
     if not R.get("ok"):
         st.info(R.get("skal", "Modellen kan inte räknas än."))
+    elif VP:
+        dos_vilopuls()
     else:
         if data_source == "oura":
             st.caption("Oura-data: *träningslast* = passets minuter × intensitet (lätt 0,5 / måttlig 1 / hård 2), "
@@ -766,8 +910,14 @@ förutsäger bäst ({R['hl']} dygn för dig). Koefficienterna i tabellen är ska
 STRESSFARG = {"lugn": C_POS, "normal": MUTED, "tung": C_NEG, "mycket tung": "#9b1c1b"}
 
 with tab_plan:
-    P = planerare(v) if R.get("ok") else None
-    if P is None:
+    P = planerare(v) if R.get("ok") and not VP else None
+    if VP:
+        st.info("**Planeraren är avstängd när modellen räknas på vilopulsen.** Den lägger veckans pass så att "
+                "så få nätter som möjligt hamnar under ditt normala spann, och spannet, osäkerheten och "
+                "stressens eftersläpning är prövade på nattlig variabilitet, inte på vilopuls. Vilopulsen rör sig "
+                "dessutom bara några slag per minut, så skillnaden mellan två upplägg skulle mest vara brus. "
+                "Vad ett pass kostar hos dig ser du under Dos–respons.")
+    elif P is None:
         st.info(R.get("skal", "Planeraren behöver modellen, och den kan inte räknas än."))
     else:
         st.markdown("Målet är en **jämn träningsnivå** vecka efter vecka, med HRV kvar i ditt normala spann. "
@@ -949,8 +1099,11 @@ with tab_form:
                     "har ett tillstånd som varken träningslast, stress eller sömn fångar. Formen är det "
                     "tillståndet, uppskattat ur hur dina senaste nätter avvikit från det väntade.")
         c = st.columns(4)
-        c[0].metric("Just nu", fmt(mf_all["form"].iloc[-1], 1, True, " ms"))
-        c[1].metric("Spridning (sd)", fmt(R["form_sd"], 1, unit=" ms"))
+        if VP:
+            st.caption("Formen är i slag per minut. Över noll (rött) ligger vilopulsen högre än vad träning och "
+                       "stress förklarar, alltså sämre. Under noll (grönt) ligger den lägre, alltså bättre.")
+        c[0].metric("Just nu", fmt(mf_all["form"].iloc[-1], 1, True, ENH))
+        c[1].metric("Spridning (sd)", fmt(R["form_sd"], 1 if not VP else 2, unit=ENH))
         a1 = R["form_acf"].get(1)
         mem = np.log(0.5) / np.log(a1) if a1 and 0 < a1 < 1 else None
         c[2].metric("Formens minne", fmt(mem, 0, unit=" dygn") if mem else "–",
@@ -964,11 +1117,11 @@ with tab_form:
             if fm:
                 xs = [MANADER[int(m) - 1] for m in fm]
                 ys = list(fm.values())
-                fig = go.Figure(go.Bar(x=xs, y=ys, marker_color=[C_POS if y > 0 else C_NEG for y in ys],
-                                       hovertemplate="%{y:+.1f} ms<extra></extra>"))
+                fig = go.Figure(go.Bar(x=xs, y=ys, marker_color=[C_POS if (y > 0) != VP else C_NEG for y in ys],
+                                       hovertemplate=f"%{{y:+.1f}}{ENH}<extra></extra>"))
                 fig.add_hline(y=0, line_color=MUTED, line_width=1)
-                st.plotly_chart(style(fig, 280, title="Formen per månad, snitt (ms)", hovermode="closest"),
-                                width="stretch")
+                st.plotly_chart(style(fig, 280, title=f"Formen per månad, snitt ({ENH.strip()})",
+                                      hovermode="closest"), width="stretch")
         with right:
             acfd = {int(k): v for k, v in R["form_acf"].items() if v is not None}
             fig = go.Figure(go.Bar(x=[f"{k} d" for k in acfd], y=list(acfd.values()), marker_color=C_7D,
@@ -1045,8 +1198,8 @@ with tab_train:
         st.info(PT["skal"])
     else:
         st.markdown("Varje punkt är ett pass, placerat efter längd, last, intensitet, puls och tid på dygnet. "
-                    "Pass som ligger nära varandra liknar varandra. Appen delar in dem i typer och räknar vad "
-                    "varje typ kostar i HRV natten efter.")
+                    "Pass som ligger nära varandra liknar varandra. Appen delar in dem i typer"
+                    + (" och räknar vad varje typ kostar i HRV natten efter." if not VP else "."))
         farg = st.radio("Färga efter", ["Passtyp", "Sport", "Veckodag", "Månad", "Säsong", "År"], horizontal=True,
                         key="pt_farg")
         kl_namn = {k["id"]: f"Typ {k['id'] + 1}: {k['beskrivning']}" for k in PT["kluster"]}
@@ -1099,8 +1252,13 @@ with tab_train:
                 "HRV natten efter mot vilodygn": "–" if k["kostnad"] is None else
                 f"{fmt(k['kostnad'], 1, True, ' ms')} (± {fmt(1.96 * k['kostnad_se'], 1)})",
                 "Dygn med bara den typen": k["n_enkla"]})
-        st.dataframe(pd.DataFrame(rader), hide_index=True, width="stretch")
-        st.caption("Kostnaden är HRV natten efter passet minus 7-dygnssnittet, jämfört med samma sak efter vilodygn. "
+        if VP:  # kostnaden per passtyp räknas på HRV, som klockan inte har
+            st.dataframe(pd.DataFrame(rader).drop(columns="HRV natten efter mot vilodygn"), hide_index=True,
+                         width="stretch")
+        else:
+            st.dataframe(pd.DataFrame(rader), hide_index=True, width="stretch")
+        if not VP:
+            st.caption("Kostnaden är HRV natten efter passet minus 7-dygnssnittet, jämfört med samma sak efter vilodygn. "
                    "Bara dygn med ett enda pass räknas, och sjukdygn är borttagna. ± är ett 95 %-intervall. "
                    "Det här är en beskrivning, inte modellen: passtyperna skiljer sig också i längd och last.")
 
@@ -1115,13 +1273,19 @@ with tab_table:
         t = t.merge(mf_all[["datum", "form", "pred"]], on="datum", how="left")
     t = t.sort_values("datum", ascending=False)
     t["datum"] = t["datum"].dt.strftime("%Y-%m-%d")
+    if VP:
+        t = t.drop(columns=["hrv_night", "hrv_7d"])
     t = t.rename(columns={"datum": "Datum", "hrv_night": "HRV natt", "hrv_7d": "HRV 7d", "rhr": "Vilopuls",
                           "sömn_h": "Sömn h", "sleep_score": "Sömnpoäng", "stress_avg": "Stress",
                           "stress_vaken": "Stress vaken",
                           "skin_temp_dev_c": "Hudtemp", "steps": "Steg", "last": "Last", "minuter": "Träning min",
-                          "form": "Form", "pred": "Förväntad HRV"})
-    st.caption("HRV, vilopuls och sömn gäller natten MOT datumet. Last, stress och steg gäller dygnet. "
-               "Form och förväntad HRV gäller natten mot datumet.")
+                          "form": "Form", "pred": "Förväntad vilopuls" if VP else "Förväntad HRV"})
+    if VP:
+        st.caption("Vilopuls och sömn gäller natten MOT datumet. Last, stress och steg gäller dygnet. "
+                   "Form och förväntad vilopuls gäller natten mot datumet.")
+    else:
+        st.caption("HRV, vilopuls och sömn gäller natten MOT datumet. Last, stress och steg gäller dygnet. "
+                   "Form och förväntad HRV gäller natten mot datumet.")
     st.dataframe(t.round(1), hide_index=True, width="stretch", height=600)
 
 # ------------------------------------------------------------------ bidra
@@ -1145,6 +1309,8 @@ dygnsvärden behöver lämna datorn.
     elif is_demo:
         st.info("Du tittar på exempeldata. Bidraget kan skapas när du har hämtat dina egna data.")
     else:
+        if VP:
+            st.caption("Ditt bidrag märks som en vilopulsmodell och jämförs bara med andra vilopulsbidrag.")
         if R["n"] < 400:
             st.warning(f"Modellen bygger på {R['n']} dygn. Resultaten blir osäkra under ungefär 400 dygn, men "
                        "bidraget är ändå användbart – osäkerheten följer med i filen.")

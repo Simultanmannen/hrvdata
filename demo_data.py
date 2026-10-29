@@ -6,6 +6,10 @@ Sanningen som simuleras (modellen ska hitta ungefär detta):
   stress(d) = 28 + AR-brus + 0,015·last(d) − 0,008·last(d−1)
 Allt sparas med fetched_at = 'demo' och pass-id 'demo-…', så det kan tas bort igen.
 
+Vilopulsvägen (punkt 10b) provas med create(con, utan_hrv=True, vilopuls_last=...): en klocka utan
+HRV-status, där vilopulsen natten efter dygn d får + vilopuls_last·last(d) slag/min. Utan argumenten
+blir datan exakt som förut (samma slumptal).
+
     python demo_data.py           # skapa
     python demo_data.py --remove  # ta bort
 """
@@ -20,7 +24,7 @@ TYPER = [("indoor_cycling", 0.25, 60, 95), ("running", 0.25, 50, 110), ("strengt
          ("kayaking_v2", 0.2, 75, 120), ("hiking", 0.1, 150, 140), ("cycling", 0.05, 120, 200)]
 
 
-def create(con, n_days: int = 900, seed: int = 7) -> None:
+def create(con, n_days: int = 900, seed: int = 7, utan_hrv: bool = False, vilopuls_last: float = 0.0) -> None:
     rng = np.random.default_rng(seed)
     today = date.today()
     days = [today - timedelta(days=n_days - i) for i in range(n_days + 1)]
@@ -67,10 +71,11 @@ def create(con, n_days: int = 900, seed: int = 7) -> None:
         prev = prev[np.isfinite(prev)]
         rows.append({
             "date": d.isoformat(),
-            "hrv_night": float(hrv[i]) if np.isfinite(hrv[i]) else None,
-            "hrv_7d": float(round(prev.mean())) if len(prev) else None,
-            "hrv_status": "BALANCED",
-            "rhr": float(round(48 + 4 * sick[i] - 0.1 * form[i] + rng.normal(0, 1.2))),
+            "hrv_night": None if utan_hrv else (float(hrv[i]) if np.isfinite(hrv[i]) else None),
+            "hrv_7d": None if utan_hrv else (float(round(prev.mean())) if len(prev) else None),
+            "hrv_status": None if utan_hrv else "BALANCED",
+            "rhr": float(round(48 + 4 * sick[i] - 0.1 * form[i] + rng.normal(0, 1.2)
+                               + vilopuls_last * (load[i - 1] if i else 0.0))),
             "respiration_avg": float(round(14 + 1.3 * sick[i] + rng.normal(0, 0.3), 1)),
             "skin_temp_dev_c": float(round(0.5 * sick[i] + rng.normal(0, 0.2), 1)),
             "stress_avg": float(stress[i]),

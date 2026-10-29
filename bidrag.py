@@ -43,6 +43,9 @@ def bygg(R: dict, deltagare: str, bakgrund: dict | None = None, kalla: str | Non
         raise ValueError("Modellen har inte kunnat köras.")
     beskrivning = dict(R["beskrivning"])
     beskrivning["kalla"] = kalla or "garmin"   # garmin: EPOC-last + 0–100-stress. oura: min×intensitet + minuter hög stress
+    # 0.4.0: vilopulsvägen (punkt 10b). Utfallet är då vilopulsen i slag/min, högre = sämre, och
+    # koefficienterna går inte att pöla med HRV-bidragen. samla.py håller isär dem på det här fältet.
+    beskrivning["utfall"] = R.get("utfall", "hrv")
     b = _r({
         "schema": SCHEMA,
         "app_version": VERSION,
@@ -81,4 +84,5 @@ def text(b: dict) -> str:
 
 
 def filnamn(b: dict) -> str:
-    return f"hrv-bidrag-{b['deltagare']}-{b['skapad']}.json"
+    vp = "-vilopuls" if (b.get("beskrivning") or {}).get("utfall") == "vilopuls" else ""
+    return f"hrv-bidrag-{b['deltagare']}-{b['skapad']}{vp}.json"
