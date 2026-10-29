@@ -610,7 +610,13 @@ def figurtext(*stycken: str) -> None:
 def statusrad() -> None:
     """Ersätter sidopanelen: källa, senaste hämtning, antal nätter, knappen, och varningar i samma rad."""
     src = jobs.source()
-    namn = {"garmin": "Garmin", "oura": "Oura"}.get(src or data_source, "Exempeldata" if is_demo else "Ingen källa")
+    kallnamn = {"garmin": "Garmin", "oura": "Oura"}
+    if src:
+        namn = kallnamn.get(src, src)
+    elif is_demo:
+        namn = "Exempeldata"
+    else:  # punkt 14c: "Ingen källa" lät som att data saknas
+        namn = f"{kallnamn[data_source]} (utloggad)" if data_source in kallnamn else "Inte inloggad"
     real = days_all[days_all["fetched_at"] != "demo"]
     senast = pd.to_datetime(real["fetched_at"].dropna().str[:10], errors="coerce").max() if not real.empty else None
     n_natter = int(days_all["rhr" if VP else "hrv_night"].notna().sum())
@@ -775,6 +781,10 @@ with tab_a:
         else:
             palett = SERIES + [MUTED, "#8c564b", "#17becf"]
         fig = go.Figure()
+        if (~urval).any():  # punkt 14b: alla övriga pass i ljusgrått bakom, så periodens pass syns i sin egen karta
+            ov = pdf[~urval]
+            fig.add_scatter(x=ov["pc1"], y=ov["pc2"], mode="markers", name=f"övriga pass ({int((~urval).sum())})",
+                            marker=dict(size=5, color="#D1D5DB", opacity=.5, line=dict(width=0)), hoverinfo="skip")
         for i, kat in enumerate(ordning):
             m = (vals == kat).values & urval
             if not m.any():
@@ -804,9 +814,10 @@ with tab_a:
         if max(PT["silhuett"].values()) < 0.25:
             st.caption(f"Silhuett {fmt(max(PT['silhuett'].values()), 2)}: dina pass glider ihop, läs tabellens ordning.")
         rader = []
-        for k in passtyper.sammanfatta(PT, urval):
+        i_perioden = {k["id"]: k["n"] for k in passtyper.sammanfatta(PT, urval)}
+        for k in PT["kluster"]:  # punkt 14b: stabila tal ur hela historiken, bara antalet följer perioden
             rader.append({
-                "Typ": kl_namn[k["id"]], "Pass": k["n"],
+                "Typ": kl_namn[k["id"]], "Pass i perioden": i_perioden.get(k["id"], 0), "Pass totalt": k["n"],
                 "Vanligast": ", ".join(f"{GRUPPNAMN.get(g, g)} ({n})" for g, n in k["topp"]),
                 "Längd (median, min)": round(k["median_min"]),
                 "Last (median)": None if k["median_last"] is None else round(k["median_last"]),
@@ -820,7 +831,8 @@ with tab_a:
         if not VP:
             figurtext("Kostnaden är HRV natten efter passet minus 7-dygnsnivån, jämfört med samma sak efter en "
                       "vilonatt. Bara dygn med ett enda pass räknas, och störda nätter är borttagna. ± är ett "
-                      "95 %-intervall.")
+                      "95 %-intervall. Tabellens tal gäller hela din historik, bara kolumnen Pass i perioden följer "
+                      "periodvalet.")
 
 
 # ------------------------------------------------------------------ figurer för b, c och d
@@ -889,7 +901,8 @@ def fig_dosrespons(R):
                         hoverinfo="skip")
     for c in (1, 2):
         fig.add_hline(y=0, line_color=MUTED, line_width=1, row=1, col=c)
-    style(fig, 360, hovermode="closest")
+    style(fig, 390, hovermode="closest", margin=dict(l=8, r=8, t=44, b=70),
+          legend=dict(orientation="h", x=0, xanchor="left", y=-0.22, yanchor="top"))
     fig.update_yaxes(title_text=f"Natten mot egen nivå ({ENH.strip()})", row=1, col=1)
     fig.update_xaxes(title_text="Dagens last", row=1, col=1)
     fig.update_xaxes(title_text="Dagsstress", row=1, col=2)
@@ -1012,7 +1025,8 @@ with tab_b:
             st.markdown("#### Din form")
             st.plotly_chart(form_chart(mf_all, 300, title=f"Det som blir över ({ENH.strip()})"), width="stretch")
             figurtext("Det här är det som blir över när vi räknat bort träning, stress och sjukdom, och det är den "
-                      "kurvan som säger om du är på väg upp eller ner. "
+                      "kurvan som säger om du är på väg upp eller ner. Den visas för hela din serie, periodvalet "
+                      "gäller inte här. "
                       + ("Över noll ligger vilopulsen högre än väntat, alltså sämre." if VP else
                          "Över noll återhämtar du dig bättre än träning och stress förklarar."),
                       md("form"), md("sasong"))
@@ -1040,7 +1054,8 @@ with tab_b:
         figurtext(
             f"Röda punkter är nätter då {'andningen' if VP else 'vilopulsen och andningen'} låg över din egen nivå "
             f"flera dygn i rad, oftast en förkylning eller en period med dålig sömn. Det gäller {n_st} av "
-            f"{R['n']} nätter. De räknas bort i figurerna ovan så att de inte ser ut som träningens kostnad.",
+            f"{R['n']} nätter. De räknas bort i figurerna ovan så att de inte ser ut som träningens kostnad. "
+            "Figuren visas för hela din serie, periodvalet gäller inte här.",
             md("sjuk"))
 
         st.markdown("#### När på dygnet stressen ligger")
@@ -1150,9 +1165,13 @@ with tab_c:
         X = S["indata"]
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.78, 0.22], vertical_spacing=0.05,
                             specs=[[{"secondary_y": True}], [{}]])
+        # Två band (punkt 14a): ljust för hur enskilda nätter sprider sig, mörkare för osäkerheten i kostnaden
+        fig.add_scatter(x=list(natter) + list(natter[::-1]), y=list(S["natt_hi"]) + list(S["natt_lo"][::-1]),
+                        fill="toself", fillcolor="rgba(42,120,214,.10)", line=dict(width=0, shape="spline"),
+                        hoverinfo="skip", name="enskilda nätter", row=1, col=1)
         fig.add_scatter(x=list(natter) + list(natter[::-1]), y=list(S["hi"]) + list(S["lo"][::-1]), fill="toself",
-                        fillcolor="rgba(42,120,214,.15)", line=dict(width=0, shape="spline"), hoverinfo="skip",
-                        name="osäkerhet (80 %)", row=1, col=1)
+                        fillcolor="rgba(42,120,214,.35)", line=dict(width=0, shape="spline"), hoverinfo="skip",
+                        name="osäkerhet i kostnaden", row=1, col=1)
         # Mjuk linje utan punkter: simuleringen ska inte se mer exakt ut än den är
         fig.add_scatter(x=natter, y=S["medel"], mode="lines", line=dict(color=C_HRV, width=2, shape="spline"),
                         name="HRV", row=1, col=1, hovertemplate="%{y:+.1f} ms<extra>HRV</extra>")
@@ -1172,8 +1191,8 @@ with tab_c:
             s0 = dagar[7 * sjuk_vecka]
             fig.add_vrect(x0=s0 - pd.Timedelta(hours=12), x1=s0 + pd.Timedelta(days=3, hours=12),
                           fillcolor="rgba(227,73,72,.08)", line_width=0, row=1, col=1)
-        lo = min(L.p10, S["lo"].min()) - 2
-        hi = max(0.0, S["hi"].max()) + 2
+        lo = min(L.p10, S["natt_lo"].min()) - 2
+        hi = max(0.0, S["natt_hi"].max()) + 2
         style(fig, 480, hovermode="x unified", title="HRV och fitness med planen")
         fig.update_yaxes(title_text="HRV mot din nivå (ms)", range=[lo, hi], row=1, col=1, secondary_y=False)
         fig.update_yaxes(title_text="Fitness", showgrid=False, row=1, col=1, secondary_y=True,
@@ -1181,9 +1200,11 @@ with tab_c:
         fig.update_yaxes(title_text="Last", row=2, col=1)
         st.plotly_chart(fig, width="stretch")
         figurtext(
-            "Den blå linjen är din HRV natt för natt mot din vanliga nivå, med ett band för hur säker "
-            "modellen är på träningens och stressens kostnad. Den streckade röda linjen är din p10, gränsen för "
-            "dina tio procent sämsta nätter senaste året. Den prickade linjen är fitness, ett 42-dygns glidande "
+            "Den blå linjen är din förväntade HRV natt för natt mot din vanliga nivå, alltså medlet. Enskilda "
+            f"nätter sprider sig kring den inom det ljusa bandet (8 av 10 nätter, ±{fmt(1.28 * L.sigma_res, 0)} ms), "
+            "det mörkare bandet visar hur säker modellen är på träningens och stressens kostnad. Den streckade röda "
+            "linjen är din p10, gränsen för dina tio procent sämsta nätter senaste året, och antalet nätter under "
+            "den räknas på spridningen, inte på linjen. Den prickade linjen är fitness, ett 42-dygns glidande "
             "medel av lasten som Stravas Fitness. Den visar vad träningen bygger, men modellen påstår inte att "
             "den flyttar återhämtningen.")
         st.markdown("**" + L.text(S) + "**")
@@ -1209,8 +1230,10 @@ passets starttid, styrkeminuter, sjukdom och din nivå veckan innan. Nivån veck
 Stressen du väljer är stressen **utanför** träningen. Ovanpå den lägger labbet det träningen själv gör med
 din dagsstress: {fmt(L.a1 * 100, 1, True)} enheter samma dag och {fmt(L.a2 * 100, 1, True)} dagen efter, per 100 i last.
 
-Passtyperna är dina egna (Träningsöversikt), med medianlast och vanligaste starttid. Bandet är ett
-80 %-intervall ur {labb.N_DRAG} dragningar av koefficienterna. Fitness startar på din fitness i dag
+Passtyperna är dina egna (Träningsöversikt), med medianlast och vanligaste starttid. Det mörkare bandet är ett
+80 %-intervall ur {labb.N_DRAG} dragningar av koefficienterna. Det ljusa bandet är linjen ±1,28 gånger modellens
+spridning för en enskild natt ({fmt(L.sigma_res, 1)} ms). Antalet nätter under p10 är summan av sannolikheten
+per natt att hamna där, givet den spridningen. Fitness startar på din fitness i dag
 ({fmt(L.fitness_nu, 0)}), räknad på de senaste 90 dygnen.
 """)
 

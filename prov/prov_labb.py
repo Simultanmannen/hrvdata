@@ -6,7 +6,8 @@ stress −1,1 ms/enhet, se demo_data.py).
 3. Ett extra pass på 200 i last kostar natten efter lika mycket som modellens totala lasteffekt.
 4. Rekursionen: efter tre hårda dagar i rad ligger vilonätterna lägre än i samma plan utan h7-termen
    (kräver att h7-koefficienten är positiv, som hos alla hittills). Veckosnittet beror inte på ordningen.
-5. Fitness: konstant last L i ett år närmar sig L. Veckomallen och texten går att köra."""
+5. Fitness: konstant last L i ett år närmar sig L. Veckomallen och texten går att köra.
+6. p10 som sannolikhet per natt (punkt 14a): senaste året uppspelat ger ungefär 10 % under p10."""
 import os
 import sys
 import tempfile
@@ -97,6 +98,15 @@ frisk, sjuk = L.kor(vilomall, 4, ["medel"] * 4), L.kor(vilomall, 4, ["medel"] * 
 kontroll("sjukperioden kostar", sjuk["medel"][14:18].mean() < frisk["medel"][14:18].mean() - 1,
          f"vilovecka med sjukdagar {sjuk['medel'][14:18].mean():+.1f}, utan {frisk['medel'][14:18].mean():+.1f} ms")
 kontroll("bandet omsluter punkten", bool(((S["lo"] <= S["medel"] + 1e-9) & (S["medel"] <= S["hi"] + 1e-9)).all()), "")
+# 6. p10 som sannolikhet per natt (punkt 14a): historiens senaste år uppspelat ska ge ungefär 10 % av
+# nätterna under p10, och ungefär lika många som faktiskt hamnade där
+mu = L.simulera(X, start_avv=y[:7] - L.jamvikt[0])[0][-365:] + L.jamvikt[0] - y[-365:].mean()
+andel = float(L.p_under(mu).mean())
+faktisk = float(np.mean(y[-365:] - y[-365:].mean() < L.p10))
+kontroll("andel under p10", 0.06 < andel < 0.14 and abs(andel - faktisk) < 0.04,
+         f"förutsagt {andel * 100:.1f} %, faktiskt {faktisk * 100:.1f} % (σ_res {L.sigma_res:.1f} ms)")
+kontroll("nattbandet bredare än kostnadsbandet", bool((S["natt_hi"] - S["natt_lo"] > S["hi"] - S["lo"]).all()),
+         f"{(S['natt_hi'] - S['natt_lo']).mean():.1f} mot {(S['hi'] - S['lo']).mean():.1f} ms")
 print("   mall:", [m["typ"] for m in L.mall_vanlig])
 print("   ", L.text(S))
 

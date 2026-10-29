@@ -8,6 +8,9 @@
 där h7(t) är medel av de sju SIMULERADE nätterna före. Det är rekursionen som ger ackumuleringen: tre hårda
 dagar sänker nästa veckas utgångsläge. Den långsamma formen hålls utanför (sätts till sitt medel).
 
+En enskild natt sprider sig kring medelkurvan med modellens residualspridning σ_res. Den ger det ljusa bandet
+(80 %) och sannolikheten per natt att hamna under p10 (punkt 14a).
+
 Utfallet visas som avvikelse från personens egen nivå: modellens jämviktsnivå när allt ligger på det
 historiska medlet och personen är frisk. Osäkerhetsbandet kommer ur koefficienternas kovarians (dragningar
 ur normalfördelningen, var och en mot sin egen jämviktsnivå, så att bandet visar osäkerheten i planens
@@ -21,12 +24,14 @@ Fitness), i lastenheter. Den kopplas ALDRIG till HRV här (punkt 4).
 
 Ren numpy, så att rattarna svarar direkt."""
 import datetime as dt
+import math
 
 import numpy as np
 
 import modell
 
 FITNESS_TAU = 42      # dygn, CTL-konventionen
+Z80 = 1.2816          # 80 %-band för enskilda nätter: ±1,28 σ_res
 N_DRAG = 300          # dragningar ur koefficienternas kovarians
 NEDVARVNING = {"Sämre än vanligt": 0.5, "Som du brukar": 0.0, "Bättre än vanligt": -0.5}  # sd övrig stress dagen efter pass
 STRESSNIVAER = ["lugn", "medel", "tung", "mycket tung"]
@@ -43,6 +48,8 @@ class Labb:
         self.b = np.linalg.solve(XtX, Xty)
         s2 = (S["ra"]["yty"] - self.b @ Xty) / (n - p)
         self.V = s2 * np.linalg.inv(XtX)
+        # Spridningen för en enskild natt kring linjen (punkt 14a): modellens residualer, samma rader som ols
+        self.sigma_res = float(math.sqrt(s2))
         self.i = {k: j for j, k in enumerate(self.namn)}
         niva = "r7" if R.get("utfall") == "vilopuls" else "h7"
         self.niva = niva
@@ -177,6 +184,12 @@ class Labb:
             hist = np.c_[hist[:, 1:], y]
         return ut - self.jamvikt[:, None]
 
+    def p_under(self, mu: np.ndarray) -> np.ndarray:
+        """Sannolikheten per natt att hamna under p10, givet medelkurvan och residualspridningen (punkt 14a).
+        Medelkurvan själv når nästan aldrig p10, enskilda nätter gör det."""
+        z = (self.p10 - np.asarray(mu, float)) / self.sigma_res
+        return 0.5 * (1 + np.vectorize(math.erf)(z / math.sqrt(2)))
+
     def fitness(self, last: np.ndarray) -> np.ndarray:
         f, ut = self.fitness_nu, []
         for x in last:
@@ -188,15 +201,17 @@ class Labb:
         X = self.indata(mall, veckor, stress_vecka, nedvarvning, sjuk_vecka)
         Y = self.simulera(X)
         fit = self.fitness(X["load"])
-        return {"medel": Y[0], "lo": np.percentile(Y[1:], 10, axis=0), "hi": np.percentile(Y[1:], 90, axis=0),
-                "indata": X, "fitness": fit, "snitt": float(Y[0].mean()),
-                "under_p10": int((Y[0] < self.p10).sum()), "n": len(Y[0]),
+        mu = Y[0]
+        return {"medel": mu, "lo": np.percentile(Y[1:], 10, axis=0), "hi": np.percentile(Y[1:], 90, axis=0),
+                "natt_lo": mu - Z80 * self.sigma_res, "natt_hi": mu + Z80 * self.sigma_res,
+                "indata": X, "fitness": fit, "snitt": float(mu.mean()),
+                "under_p10": float(self.p_under(mu).sum()), "n": len(mu),
                 "fitness_fran": self.fitness_nu, "fitness_till": float(fit[-1]),
                 "veckolast": float(X["load"][:7].sum())}
 
     def text(self, S: dict, enh: str = "ms") -> str:
         f = lambda x, n=1: f"{x:+.{n}f}".replace("-", "−").replace(".", ",")
         g = lambda x: f"{x:.0f}"
-        return (f"Planen ger i snitt {f(S['snitt'])} {enh} per natt mot din vanliga nivå och når din p10 "
-                f"{S['under_p10']} nätter av {S['n']}. Fitness går från {g(S['fitness_fran'])} till "
+        return (f"Planen ger i snitt {f(S['snitt'])} {enh} per natt mot din vanliga nivå och ungefär "
+                f"{S['under_p10']:.0f} nätter av {S['n']} under din p10. Fitness går från {g(S['fitness_fran'])} till "
                 f"{g(S['fitness_till'])}.")
