@@ -142,33 +142,50 @@ def bygg(con, sjuk: list[str] | set[str] = (), seed: int = 0) -> dict:
     alla_lpm = np.array([p["lpm"] for p in pass_], float)
     t_min = np.percentile(alla_min, [33, 67])
     t_lpm = np.nanpercentile(alla_lpm, [33, 67]) if np.isfinite(alla_lpm).any() else None
-    kluster = []
+    # Namnen sätts på hela historiken och följer med när tabellen räknas för ett urval
+    namn = {}
     for j in range(k_bast):
         P = [p for p in pass_ if p["kluster"] == j]
-        grupper = {}
-        for p in P:
-            grupper[p["grupp"]] = grupper.get(p["grupp"], 0) + 1
-        topp = sorted(grupper.items(), key=lambda x: -x[1])
         m_min = float(np.median([p["min"] for p in P]))
         m_lpm = float(np.nanmedian([p["lpm"] for p in P])) if t_lpm is not None else np.nan
         langd = "långa" if m_min > t_min[1] else ("korta" if m_min < t_min[0] else "medellånga")
         intens = "" if t_lpm is None else ("hårda" if m_lpm > t_lpm[1] else ("lätta" if m_lpm < t_lpm[0] else "medelhårda"))
+        namn[j] = f"{langd}, {intens}".strip(", ") if intens else langd
+    res = {"ok": True, "pass": pass_, "poang": poang[:, :2], "forklarad": forklarad.tolist(),
+           "laddningar": {n: Vt[:2, i].tolist() for i, (_, n) in enumerate(anvanda)},
+           "variabler": [n for _, n in anvanda], "k": k_bast, "namn": namn,
+           "silhuett": {k: v[0] for k, v in val.items()}, "vila_avv": vila_m,
+           "vila_var": float(vila.var(ddof=1)) if len(vila) > 1 else 0.0, "n_vila": int(len(vila))}
+    res["kluster"] = sammanfatta(res)
+    return res
+
+
+def sammanfatta(res: dict, urval=None) -> list[dict]:
+    """Klustertabellen för ett urval av pass (bool per pass, i samma ordning som res['pass']), med namnen
+    från hela historiken. None = alla pass. Används för att tabellen ska följa tidsväljaren och sportfiltret.
+    Kostnad = HRV natten efter minus 7-dygnssnittet, jämfört med vilodygn (vilodygnen alltid hela historiken)."""
+    pass_ = res["pass"] if urval is None else [p for p, u in zip(res["pass"], urval) if u]
+    ut = []
+    for j in range(res["k"]):
+        P = [p for p in pass_ if p["kluster"] == j]
+        if not P:
+            continue
+        grupper = {}
+        for p in P:
+            grupper[p["grupp"]] = grupper.get(p["grupp"], 0) + 1
         enkla = np.array([p["avv"] for p in P if p["n_pass_dygn"] == 1 and np.isfinite(p["avv"])])
         last = np.array([p["load"] for p in P], float)
-        kostnad = float(enkla.mean() - vila_m) if len(enkla) >= 5 else None
-        se = float(np.sqrt(enkla.var(ddof=1) / len(enkla) + (vila.var(ddof=1) / len(vila) if len(vila) > 1 else 0)))\
+        kostnad = float(enkla.mean() - res["vila_avv"]) if len(enkla) >= 5 else None
+        se = float(np.sqrt(enkla.var(ddof=1) / len(enkla) + (res["vila_var"] / res["n_vila"] if res["n_vila"] > 1 else 0)))\
             if len(enkla) >= 5 else None
-        kluster.append({
-            "id": j, "n": len(P), "n_enkla": int(len(enkla)), "topp": topp[:3],
-            "beskrivning": f"{langd}, {intens}".strip(", ") if intens else langd,
-            "median_min": m_min, "median_last": float(np.nanmedian(last)) if np.isfinite(last).any() else None,
+        ut.append({
+            "id": j, "n": len(P), "n_enkla": int(len(enkla)),
+            "topp": sorted(grupper.items(), key=lambda x: -x[1])[:3], "beskrivning": res["namn"][j],
+            "median_min": float(np.median([p["min"] for p in P])),
+            "median_last": float(np.nanmedian(last)) if np.isfinite(last).any() else None,
             "kostnad": kostnad, "kostnad_se": se,
         })
-    return {"ok": True, "pass": pass_, "poang": poang[:, :2], "forklarad": forklarad.tolist(),
-            "laddningar": {n: Vt[:2, i].tolist() for i, (_, n) in enumerate(anvanda)},
-            "variabler": [n for _, n in anvanda], "k": k_bast,
-            "silhuett": {k: v[0] for k, v in val.items()}, "kluster": kluster, "vila_avv": vila_m,
-            "n_vila": int(len(vila))}
+    return ut
 
 
 def pc_namn(res: dict, j: int) -> str:

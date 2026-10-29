@@ -60,11 +60,13 @@ con = db.connect(); print("   kalla i meta:", db.meta_get(con, "kalla"), "| dygn
 
 at, errs = run("Oura med data")
 assert not errs
-assert [t.label for t in at.tabs][:3] == ["Översikt", "Dos–respons", "Planera veckan"], [t.label for t in at.tabs]
+assert [t.label for t in at.tabs][:5] == ["Träningsöversikt", "Stress och återhämtning", "Träningslabb", "Bidrag", "Data"], [t.label for t in at.tabs]
+assert not at.sidebar.children, "sidopanelen ska vara borta (punkt 13)"
+assert not at.metric, "inga nyckeltalsrutor (punkt 13)"
 txt = " ".join(x.value for x in at.caption) + " ".join(x.value for x in at.markdown) + " ".join(x.value for x in at.success)
 assert "Inloggad mot Oura" in txt, "statusen saknas"
 assert "Oura-data" in txt, "Oura-noten i Dos–respons saknas"
-print("   status och Oura-not visas; metrics:", [m.label for m in at.metric][:6])
+print("   status och Oura-not visas, fem flikar, ingen sidopanel")
 
 # 3. logga ut Oura, Garmin-exempeldata (regression)
 oura.logout()

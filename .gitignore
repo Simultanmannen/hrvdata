@@ -21,6 +21,7 @@ prov/*
 !prov/prov_vaken.py
 !prov/prov_sparr.py
 !prov/prov_passtyper.py
+!prov/prov_labb.py
 
 # Interna anteckningar
 CLAUDE.md

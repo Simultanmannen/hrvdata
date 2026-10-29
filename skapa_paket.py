@@ -14,7 +14,7 @@ from pathlib import Path
 from version import UPDATE_REPO, VERSION
 
 ROOT = Path(__file__).resolve().parent
-FILES = ["Starta HRV-data.bat", "Starta HRV-data.command", "LÄSMIG.txt", "starta.py", "dashboard.py", "modell.py", "planering.py", "passtyper.py", "bidrag.py", "db.py",
+FILES = ["Starta HRV-data.bat", "Starta HRV-data.command", "LÄSMIG.txt", "starta.py", "dashboard.py", "modell.py", "planering.py", "passtyper.py", "labb.py", "berattelse.py", "bidrag.py", "db.py",
          "config.py", "sync.py", "oura.py", "jobs.py", "importera.py", "demo_data.py", "version.py", "updater.py",
          "requirements-lock.txt", ".streamlit/config.toml"]
 # Spärr: de här får aldrig in i ett publikt paket, även om någon lägger till dem i FILES.

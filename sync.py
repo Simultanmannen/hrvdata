@@ -248,6 +248,46 @@ def uppdatera_vaken(con, d: str, mapp=None) -> bool:
     return cur.rowcount > 0 and medel is not None
 
 
+def stress_per_timme(mapp=None, fran: str | None = None, till: str | None = None) -> dict:
+    """Värmekartan i Stress och återhämtning (punkt 13): medel av 3-minutersstressen per veckodag och timme,
+    lokal tid, i samma vakna fönster som stress_vaken (uppvaknande till insomning, utan −1/−2, alltså utan
+    sömn och pass). Dygn utan nästa natts insomning hoppas över. Returnerar {'medel': 7×24 (None där data
+    saknas), 'antal': 7×24 (antal 3-minutersvärden), 'dygn': antal dygn}. Veckodag 0 = måndag."""
+    mapp = mapp or JSON_DIR
+    summa = [[0.0] * 24 for _ in range(7)]
+    antal = [[0] * 24 for _ in range(7)]
+    dygn = 0
+    for p in sorted(mapp.glob("????-??-??.json")):
+        d = p.stem
+        if (fran and d < fran) or (till and d > till):
+            continue
+        raw = _las_json(p)
+        stress = (raw or {}).get("stress")
+        somn = dig(raw, "sleep", "dailySleepDTO")
+        if not stress or not somn or somn.get("sleepEndTimestampGMT") is None:
+            continue
+        nxt = _las_json(mapp / f"{(date.fromisoformat(d) + timedelta(days=1)).isoformat()}.json") or {}
+        insomning = (dig(nxt, "sleep", "dailySleepDTO") or {}).get("sleepStartTimestampGMT")
+        vaken = somn["sleepEndTimestampGMT"]
+        lok, gmt = stress.get("startTimestampLocal"), stress.get("startTimestampGMT")
+        if insomning is None or insomning <= vaken or not lok or not gmt:
+            continue
+        forskjut = _gmt_ms(lok) - _gmt_ms(gmt)          # lokal tid minus GMT, i ms
+        slut = min(_gmt_ms(stress.get("endTimestampGMT")) or float("inf"), insomning)
+        vd = date.fromisoformat(d).weekday()
+        n = 0
+        for t, x in stress.get("stressValuesArray") or []:
+            if t is None or x is None or x < 0 or not (vaken <= t < slut):
+                continue
+            h = datetime.fromtimestamp((t + forskjut) / 1000, tz=timezone.utc).hour
+            summa[vd][h] += x
+            antal[vd][h] += 1
+            n += 1
+        dygn += n > 0
+    medel = [[summa[i][h] / antal[i][h] if antal[i][h] else None for h in range(24)] for i in range(7)]
+    return {"medel": medel, "antal": antal, "dygn": dygn}
+
+
 def complete(d: str, fetched_at: str | None) -> bool:
     """Garmin fyller på sömn, HRV och stress i efterhand. Ett dygn räknas som klart först om
     det hämtades minst två dygn efter att det tog slut."""
