@@ -91,7 +91,7 @@ def friendly_error(e: Exception) -> str:
     if "429" in text:
         return "Oura säger att det har varit för många anrop. Vänta några minuter och försök igen."
     if "401" in text or "403" in text:
-        return "Oura godkänner inte inloggningen längre. Anslut Oura igen under Data & konto."
+        return "Oura godkänner inte inloggningen längre. Anslut Oura igen under Data."
     if "Connection" in name or "timeout" in text or "resolve" in text:
         return "Kunde inte nå Oura. Kontrollera internetanslutningen och försök igen."
     return f"Något gick fel mot Oura ({name}). Försök igen om en stund."
@@ -126,7 +126,7 @@ def exchange_code(client_id: str, client_secret: str, code: str) -> dict:
 def refresh() -> dict:
     tok = _load()
     if not tok.get("refresh_token"):
-        raise OuraAuthError("Ingen sparad Oura-inloggning. Anslut Oura under Data & konto.")
+        raise OuraAuthError("Ingen sparad Oura-inloggning. Anslut Oura under Data.")
     new = _token_request(dict(grant_type="refresh_token", refresh_token=tok["refresh_token"],
                               client_id=tok["client_id"], client_secret=tok["client_secret"]))
     tok.update(new)          # refresh-token är engångs: det nya måste sparas direkt
@@ -137,7 +137,7 @@ def refresh() -> dict:
 def access_token() -> str:
     tok = _load()
     if not tok.get("access_token"):
-        raise OuraAuthError("Ingen sparad Oura-inloggning. Anslut Oura under Data & konto.")
+        raise OuraAuthError("Ingen sparad Oura-inloggning. Anslut Oura under Data.")
     if time.time() > tok.get("expires_at", 0):
         tok = refresh()
     return tok["access_token"]

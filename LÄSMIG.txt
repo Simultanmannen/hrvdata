@@ -58,7 +58,7 @@ registrerar du en egen "API-nyckel" i ditt Oura-konto (gratis, en gång):
    Redirect URI: exakt   http://localhost:8765/callback
    Övriga fält kan lämnas som de är. Spara.
 3. Du får ett Client ID och ett Client Secret. Kopiera dem.
-4. I appen: fliken "Data & konto", underfliken "Oura". Klistra in båda och
+4. I appen: fliken "Data", underfliken "Oura". Klistra in båda och
    klicka "Anslut Oura". Webbläsaren öppnar Ouras sida där du godkänner
    att HRV-data får läsa dina data. Sedan startar hämtningen.
 Appen sparar nyckeln i mappen "data". Ditt Oura-lösenord passerar aldrig appen.
@@ -83,14 +83,27 @@ Klockor som INTE mäter HRV-status, bland andra:
   Venu Sq och Venu Sq 2, Venu och Venu 2/2S (Venu 2 Plus har det),
   Vivoactive 3 och 4, Vivosmart 4 och 5, Fenix 5 och 6,
   Forerunner 45, 55, 245, 745 och 945, Instinct och Instinct 2.
-Med en sådan klocka kan appen visa vilopuls, sömn, stress och träning,
-men inte räkna modellen eller ta fram ett bidrag. Bytte du klocka för en
-tid sedan räknas modellen från den dag den nya klockan började mäta HRV.
+Med en sådan klocka räknar appen modellen på vilopulsen i sömnen i stället
+för HRV (från version 0.4.0). Allt visas då i slag per minut, och högre
+vilopuls är sämre. Träningslabbet är avstängt för vilopuls, och bidraget märks
+som en vilopulsmodell. Bytte du klocka för en tid sedan räknas modellen från
+den dag den nya klockan började mäta HRV.
 
 
-BIDRA
------
-Under fliken "Bidra" kan du spara en liten fil med sammanfattade resultat
+FLIKARNA
+--------
+Träningsöversikt: dina pass och nätter, med period- och sportval.
+Stress och återhämtning: vad träning, stress och sjukdom kostar dig, och
+  din långsamma form.
+Träningslabb: lägg upp en vecka och se vad den gör med HRV och fitness de
+  kommande veckorna.
+Bidrag: bidragsfilen och din egen rapport.
+Data: inloggning, hämtning, uppdatering och tabellen dygn för dygn.
+
+
+BIDRAG
+------
+Under fliken "Bidrag" kan du spara en liten fil med sammanfattade resultat
 från din modell (inga dygnsvärden, inga datum, inga pass). Den används för
 att pröva om modellen gäller för fler än den person den byggdes på. Du ser
 hela filen innan du sparar den, och det är du som skickar den.

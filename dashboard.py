@@ -271,7 +271,7 @@ def _job_body() -> None:
         if j.error is None:
             st.session_state["job_done"] = f"Hämtningen är klar – {j.new} nya pass. Modellen räknas om automatiskt."
         elif "Authentication" in type(j.error).__name__:
-            st.session_state["job_error"] = "Inloggningen mot Garmin har gått ut. Logga in igen under Data & konto."
+            st.session_state["job_error"] = "Inloggningen mot Garmin har gått ut. Logga in igen under Data."
         elif isinstance(j.error, oura.OuraAuthError):
             st.session_state["job_error"] = str(j.error)
         else:

@@ -645,7 +645,7 @@ def _kor(D, A, start, t0, tick, utfall) -> dict:
                 f'Klockan har mätt vilopuls {n_rhr} nätter men ingen nattlig HRV. Den saknar troligen '
                 'HRV-status, till exempel Venu Sq, Venu 2 (inte Plus), Vivoactive 4, Vivosmart 5, Fenix 6 eller '
                 'äldre Forerunner. Se listan i LÄSMIG. Vilopuls, sömn, stress och träning visas ändå under '
-                'Hälsa och Träning.')}
+                'Träningsöversikt.')}
         return {'ok': False, 'skal': 'Ingen nattlig HRV i databasen ännu.'}
     start = max(start or first, first)
     tick('Sjukindex', 0.05)

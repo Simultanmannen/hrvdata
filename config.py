@@ -10,7 +10,7 @@ TOKEN_DIR = DATA_DIR / "garmin_tokens"  # Garmin-token (inte lösenord). Oura-to
 DB_PATH = DATA_DIR / "hrv.db"
 BIDRAG_DIR = DATA_DIR / "bidrag"        # sparade bidragsfiler
 
-# Vart bidragsfilen ska skickas. Visas i fliken Bidra. Tomt = ingen adress visas.
+# Vart bidragsfilen ska skickas. Visas i fliken Bidrag. Tomt = ingen adress visas.
 BIDRAG_MOTTAGARE = ""
 
 
