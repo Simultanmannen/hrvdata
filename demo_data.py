@@ -10,6 +10,9 @@ Vilopulsvägen (punkt 10b) provas med create(con, utan_hrv=True, vilopuls_last=.
 HRV-status, där vilopulsen natten efter dygn d får + vilopuls_last·last(d) slag/min. Utan argumenten
 blir datan exakt som förut (samma slumptal).
 
+Klocka utan Training Status (punkt 15b) provas med create(con, utan_last=True): ingen last och ingen TE på
+passen, men medelpuls och maxpuls som följer passets intensitet. Sanningen (HRV) bygger på samma last som förut.
+
     python demo_data.py           # skapa
     python demo_data.py --remove  # ta bort
 """
@@ -24,7 +27,8 @@ TYPER = [("indoor_cycling", 0.25, 60, 95), ("running", 0.25, 50, 110), ("strengt
          ("kayaking_v2", 0.2, 75, 120), ("hiking", 0.1, 150, 140), ("cycling", 0.05, 120, 200)]
 
 
-def create(con, n_days: int = 900, seed: int = 7, utan_hrv: bool = False, vilopuls_last: float = 0.0) -> None:
+def create(con, n_days: int = 900, seed: int = 7, utan_hrv: bool = False, vilopuls_last: float = 0.0,
+           utan_last: bool = False) -> None:
     rng = np.random.default_rng(seed)
     today = date.today()
     days = [today - timedelta(days=n_days - i) for i in range(n_days + 1)]
@@ -53,6 +57,24 @@ def create(con, n_days: int = 900, seed: int = 7, utan_hrv: bool = False, vilopu
                      "duration_s": dur * 60, "distance_m": None, "avg_hr": None, "max_hr": None,
                      "aerobic_te": round(min(5, 1.017 * np.log(tl) - 1.433), 1), "anaerobic_te": 0.5,
                      "training_load": round(tl), "calories": None})
+    if utan_last:
+        # Punkt 15b: klocka med HRV-status men utan Training Status. Ingen last och ingen TE, men medelpuls som
+        # följer passets intensitet (last per minut). Egen slumpgenerator, så resten av datan blir som förut.
+        rng2 = np.random.default_rng(seed + 1000)
+        for a in acts:
+            ipm = a["training_load"] / (a["duration_s"] / 60)
+            a["avg_hr"] = float(round(np.clip(85 + 45 * ipm + rng2.normal(0, 6), 80, 185)))
+            a["max_hr"] = float(a["avg_hr"] + round(rng2.uniform(10, 25)))
+            a["training_load"] = a["aerobic_te"] = a["anaerobic_te"] = None
+    # Punkt 15a: ett pass utan last och ett utan längd, sista dygnet (ingen natt efter, så modellen påverkas
+    # inte, och inga slumptal dras, så resten av datan blir som förut). Ska synas i Senaste passen.
+    sista = days[-1].isoformat()
+    acts.append({"activity_id": "demo-utan-last", "date": sista, "type_key": "yoga", "name": "Demo yoga",
+                 "start_local": f"{sista} 07:15:00", "duration_s": 1800.0, "distance_m": None, "avg_hr": None,
+                 "max_hr": None, "aerobic_te": None, "anaerobic_te": None, "training_load": None, "calories": None})
+    acts.append({"activity_id": "demo-utan-langd", "date": sista, "type_key": "walking", "name": "Demo promenad",
+                 "start_local": f"{sista} 08:30:00", "duration_s": None, "distance_m": None, "avg_hr": None,
+                 "max_hr": None, "aerobic_te": None, "anaerobic_te": None, "training_load": None, "calories": None})
 
     ar = np.zeros(N)
     for i in range(1, N):

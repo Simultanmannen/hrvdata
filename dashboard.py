@@ -170,6 +170,9 @@ def query(sql, params=()) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_days(v) -> pd.DataFrame:
     df = query("SELECT * FROM days ORDER BY date")
+    for k in df.columns:   # punkt 15a: kolumner där alla värden saknas blir annars object
+        if k not in ("date", "hrv_status", "fetched_at"):
+            df[k] = pd.to_numeric(df[k], errors="coerce")
     df["datum"] = pd.to_datetime(df["date"])
     df["sömn_h"] = df["sleep_seconds"] / 3600
     return df
@@ -178,6 +181,15 @@ def load_days(v) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_acts(v) -> pd.DataFrame:
     df = query("SELECT * FROM activities ORDER BY start_local")
+    # Punkt 15a: en kolumn där alla värden saknas blir object i pandas, och då kraschar .round()
+    for k in ("duration_s", "distance_m", "avg_hr", "max_hr", "aerobic_te", "anaerobic_te", "training_load", "calories"):
+        df[k] = pd.to_numeric(df[k], errors="coerce")
+    # Punkt 15b: klockan ger ingen träningslast, samma ersättning som modellen räknar (rådatan ändras inte)
+    v, vag = modell.ersattningslast_varden(df["duration_s"], df["avg_hr"], df["max_hr"], df["aerobic_te"],
+                                           df["training_load"])
+    if vag is not None:
+        df["training_load"] = v
+    df["last_ersatt"] = vag
     df["datum"] = pd.to_datetime(df["date"])
     df["grupp"] = df["type_key"].map(modell.grupp)
     df["min"] = df["duration_s"].fillna(0) / 60
@@ -598,6 +610,9 @@ if VP:
 _con = dbm.connect()
 data_source = dbm.meta_get(_con, "kalla") or jobs.source()
 _con.close()
+# Punkt 15b: klockan ger inte Garmins träningslast, appen räknar den ur TE eller minuter och puls
+LASTVAG = acts_all["last_ersatt"].iloc[0] if not acts_all.empty else None
+LASTTEXT = {"puls": "minuter och puls", "te": "klockans Training Effect"}.get(LASTVAG)
 
 
 def figurtext(*stycken: str) -> None:
@@ -625,6 +640,8 @@ def statusrad() -> None:
     if senast is not None and pd.notna(senast):
         delar.append(f"senast hämtat {sv(senast)}")
     delar.append(f"{n_natter:,} nätter".replace(",", " "))
+    if LASTTEXT:
+        delar.append(f"last räknad ur {LASTTEXT}")
     c1.markdown(" · ".join(delar))
     klick = c2.button("Hämta nya data", type="primary", disabled=jobs.JOB.running or not src, width="stretch",
                       key="status_hamta")
@@ -691,8 +708,8 @@ with tab_a:
         for g in [g for g in GRUPPNAMN if g in set(pass_p["grupp"])]:
             sub = pass_p[pass_p["grupp"] == g]
             start_t = pd.to_datetime(sub["start_local"], errors="coerce").dt.strftime("%H:%M").fillna("–")
-            cd = np.c_[sub["name"].fillna(GRUPPNAMN[g]), sub["min"].round(0), start_t, sub["avg_hr"].fillna(0).round(0),
-                       sub["training_load"].fillna(0).round(0)]
+            num = lambda k: pd.to_numeric(sub[k], errors="coerce").fillna(0).round(0)
+            cd = np.c_[sub["name"].fillna(GRUPPNAMN[g]), num("min"), start_t, num("avg_hr"), num("training_load")]
             med = sub["training_load"].fillna(0) > 0
             fig.add_bar(x=sub["datum"][med], y=sub["training_load"][med], name=GRUPPNAMN[g], marker_color=GRUPPFARG[g],
                         customdata=cd[med.values], row=1, col=1,
@@ -706,7 +723,8 @@ with tab_a:
                                 hovertemplate="%{customdata[0]} (ingen last)<br>%{customdata[1]} min · start "
                                               "%{customdata[2]}<extra></extra>")
         farg = np.where(natt["avv"] >= 0, C_NEG if VP else C_POS, C_POS if VP else C_NEG)
-        cd = np.c_[natt["hrv_night"].fillna(0).round(0), natt["sömn_h"].fillna(0).round(1), natt["rhr"].fillna(0).round(0)]
+        num = lambda k, n=0: pd.to_numeric(natt[k], errors="coerce").fillna(0).round(n)
+        cd = np.c_[num("hrv_night"), num("sömn_h", 1), num("rhr")]
         fig.add_scatter(x=natt["datum"], y=natt["avv"], mode="markers", marker=dict(size=7, color=farg), row=2, col=1,
                         customdata=cd, showlegend=False,
                         hovertemplate=("%{x|%d %b}: %{y:+.1f}" + ENH + " mot 7 dygn<br>"
@@ -733,8 +751,8 @@ with tab_a:
         sen = pass_p.sort_values("start_local", ascending=False).head(10)
         st.dataframe(pd.DataFrame({
             "Datum": sen["datum"].dt.strftime("%Y-%m-%d"), "Sport": sen["grupp"].map(GRUPPNAMN),
-            "Namn": sen["name"], "Längd (min)": sen["min"].round(0).astype(int),
-            "Last": sen["training_load"].round(0), "Start": pd.to_datetime(sen["start_local"], errors="coerce").dt.strftime("%H:%M")}),
+            "Namn": sen["name"], "Längd (min)": pd.to_numeric(sen["min"], errors="coerce").round(0).astype("Int64"),
+            "Last": pd.to_numeric(sen["training_load"], errors="coerce").round(0), "Start": pd.to_datetime(sen["start_local"], errors="coerce").dt.strftime("%H:%M")}),
             hide_index=True, width="stretch")
 
         # --- last per vecka
@@ -793,7 +811,8 @@ with tab_a:
             fig.add_scatter(
                 x=sub["pc1"], y=sub["pc2"], mode="markers", name=f"{kat} ({m.sum()})",
                 marker=dict(size=6, color=palett[i % len(palett)], opacity=.7, line=dict(width=0)),
-                customdata=np.c_[sub["date"], sub["typ"], sub["min"].round(0), sub["load"].round(0)],
+                customdata=np.c_[sub["date"], sub["typ"], pd.to_numeric(sub["min"], errors="coerce").round(0),
+                                 pd.to_numeric(sub["load"], errors="coerce").round(0)],
                 hovertemplate="%{customdata[0]} · %{customdata[1]}<br>%{customdata[2]} min · last %{customdata[3]}"
                               "<extra></extra>")
         style(fig, 460, hovermode="closest", title=f"Dina pass ({int(urval.sum())} av {len(pdf)})",
@@ -851,7 +870,8 @@ def gruppstod(v) -> dict | None:
     P = planerare(v)
     if P is None or not P.sparr:
         return None
-    return modell.gruppkrympning(run_model(v), grupp_prior_fil(), data_source)
+    R = run_model(v)
+    return modell.gruppkrympning(R, grupp_prior_fil(), modell.effektiv_kalla(R, data_source))
 
 
 def stodtext(stod: dict, inledning: str) -> str:
@@ -1016,6 +1036,15 @@ with tab_b:
             st.info("**Din klocka mäter inte nattlig HRV**, eller har gjort det för kort tid. Modellen räknas därför "
                     "på vilopulsen i sömnen i stället. Allt nedan är i slag per minut, och **högre vilopuls är sämre**: "
                     "ett pass som kostar syns som ett plus natten efter.")
+        if LASTTEXT:
+            st.info(f"**Din klocka ger inte Garmins träningslast** (den saknar Training Status). Appen räknar därför "
+                    f"lasten själv ur {LASTTEXT}: "
+                    + ("minuterna gånger 0,5, 1 eller 2 beroende på om medelpulsen låg under 70 %, mellan 70 och "
+                       "85 % eller över 85 % av din högsta uppmätta maxpuls. Ett hårt entimmespass blir 120, ett "
+                       "lugnt 30. " if LASTVAG == "puls" else
+                       "Training Effect bygger på samma modell som Garmins last, så talen blir ungefär desamma. ")
+                    + "Kostnaden per 100 i last går därför inte att jämföra exakt med andras, och ditt bidrag märks "
+                      "så att det inte blandas med Garmins last.")
         if data_source == "oura":
             st.caption("Oura-data: *träningslast* = passets minuter × intensitet (lätt 0,5 / måttlig 1 / hård 2), "
                        "så ett hårt entimmespass är 120 och ett lugnt 30. *Dagsstress* = minuter med hög stress "

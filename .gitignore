@@ -24,6 +24,7 @@ prov/*
 !prov/prov_labb.py
 !prov/prov_vilopuls.py
 !prov/prov_gruppstod.py
+!prov/prov_ersattningslast.py
 
 # Interna anteckningar
 CLAUDE.md

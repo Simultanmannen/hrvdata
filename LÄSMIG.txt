@@ -89,6 +89,22 @@ vilopuls är sämre. Träningslabbet är avstängt för vilopuls, och bidraget m
 som en vilopulsmodell. Bytte du klocka för en tid sedan räknas modellen från
 den dag den nya klockan började mäta HRV.
 
+Träningslast. Garmin räknar bara ut träningslasten på klockor med Training
+Status. Några klockor har HRV-status men inte Training Status:
+
+  Klocka            HRV-status   Träningslast från Garmin
+  Venu 3            ja           nej (appen räknar ur minuter och puls)
+  Vivoactive 5      ja           nej (appen räknar ur minuter och puls)
+  Forerunner 165    ja           nej (appen räknar ur Training Effect)
+  Forerunner 255,
+  265, 955, 965,
+  Fenix 7/8, Epix   ja           ja
+
+Appen fungerar med sådana klockor (från version 0.5.1) men räknar lasten
+själv. Statusraden överst säger då "last räknad ur ...". Tabellen bygger på
+Garmins produktsidor i oktober 2026; finns "Träningsstatus" i Garmin
+Connect-appen har din klocka Garmins last.
+
 
 FLIKARNA
 --------

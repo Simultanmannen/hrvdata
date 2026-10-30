@@ -74,5 +74,15 @@ con = db.connect(); con.execute("delete from days"); con.execute("delete from ac
 import demo_data; demo_data.create(con); con.close()
 at, errs = run("Garmin-exempeldata")
 assert not errs
+
+# 4. klocka utan Garmins träningslast (punkt 15): alla pass saknar last och TE, pulsen finns
+con = db.connect(); con.execute("delete from days"); con.execute("delete from activities"); con.commit()
+demo_data.create(con, utan_last=True); con.close()
+at, errs = run("Garmin-exempeldata utan träningslast")
+assert not errs
+txt = " ".join(x.value for x in at.markdown) + " ".join(x.value for x in at.info)
+assert "last räknad ur minuter och puls" in txt, "statusraden säger inte att lasten räknas"
+assert "Din klocka ger inte Garmins träningslast" in txt, "texten i Stress och återhämtning saknas"
+print("   statusrad och text om ersättningslasten visas")
 shutil.rmtree(tmp, ignore_errors=True)
 print("ALLT OK")

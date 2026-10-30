@@ -56,7 +56,71 @@ def las(con: sqlite3.Connection):
                             from activities order by date,start_local"""):
         A.setdefault(r[0], []).append(dict(zip(
             'date type dur hr hrmax ate ante load start'.split(), r)))
+    ersatt_last(A)
     return D, A
+
+
+# ----------------------------------------------------------------- ersättningslast (punkt 15b)
+# Klockor med HRV-status men utan Training Status ger ingen träningslast. Då räknas en ersättning här,
+# vid inläsningen, så att rådatan i databasen behålls. Garmins egen last används när den finns.
+LAST_SAKNAS_GRANS = 0.9      # mer än så av passen utan last: ersätt
+TE_ANDEL = 0.8               # så stor andel pass med aerob TE krävs för TE-vägen
+# last ≈ exp(a + b·aerob TE), anpassad på referenspersonens pass med både TE och last (n 1 443, r 0,92 per pass).
+# TE bygger på samma EPOC-modell som Garmins last.
+TE_A, TE_B = 1.593, 0.917
+PULS_KLASSER = (0.70, 0.85)  # andel av egen maxpuls: under, mellan, över
+PULS_FAKTOR = (0.5, 1.0, 2.0)  # som Oura-mappningen: lätt, måttlig, hård
+MAXPULS_PERCENTIL = 98       # "högsta uppmätta" med skydd mot mätfel (referenspersonen har ett pass med 254)
+
+
+def ersattningslast_varden(dur, hr, mx, ate, load) -> tuple[np.ndarray | None, str | None]:
+    """Ersättningslast per pass ur arrayer (sekunder, medelpuls, maxpuls, aerob TE, Garmins last). Returnerar
+    (last, 'te'/'puls') när mer än LAST_SAKNAS_GRANS av passen saknar last, annars (None, None).
+    Samma funktion används av modell.las och av dashboarden."""
+    f = lambda v: np.array([np.nan if x is None else x for x in v], float)
+    dur, hr, mx, ate, load = f(dur), f(hr), f(mx), f(ate), f(load)
+    n = len(load)
+    if n < 10 or np.mean(~np.isfinite(load)) <= LAST_SAKNAS_GRANS:
+        return None, None
+    minuter = np.nan_to_num(dur) / 60
+    if np.mean(np.isfinite(ate)) >= TE_ANDEL:
+        return np.where(np.isfinite(ate), np.exp(TE_A + TE_B * np.nan_to_num(ate)), 0.0), "te"
+    if np.mean(np.isfinite(hr) & (minuter > 0)) < 0.5:
+        return None, None
+    topp = mx[np.isfinite(mx)] if np.isfinite(mx).sum() >= 20 else hr[np.isfinite(hr)]
+    hrmax = float(np.percentile(topp, MAXPULS_PERCENTIL))
+    pct = hr / hrmax
+    fak = np.where(pct < PULS_KLASSER[0], PULS_FAKTOR[0], np.where(pct <= PULS_KLASSER[1], PULS_FAKTOR[1],
+                                                                    PULS_FAKTOR[2]))
+    return np.where(np.isfinite(hr), minuter * fak, 0.0), "puls"
+
+
+def ersatt_last(A: dict) -> str | None:
+    """Byter load på alla pass i A mot ersättningslasten när Garmins saknas (punkt 15b). Märker passen med
+    'last_ersatt' = 'te'/'puls'. Returnerar vägen eller None."""
+    alla = [a for acts in A.values() for a in acts]
+    v, vag = ersattningslast_varden([a["dur"] for a in alla], [a["hr"] for a in alla], [a["hrmax"] for a in alla],
+                                    [a["ate"] for a in alla], [a["load"] for a in alla])
+    if vag is None:
+        return None
+    for a, x in zip(alla, v):
+        a["load"], a["last_ersatt"] = float(x), vag
+    return vag
+
+
+def lastvag(A: dict) -> str | None:
+    """'te'/'puls' om lasten är ersatt, annars None."""
+    for acts in A.values():
+        for a in acts:
+            return a.get("last_ersatt")
+    return None
+
+
+def effektiv_kalla(R: dict, kalla: str | None) -> str:
+    """Källan som bidraget märks med: garmin_puls/garmin_te när lasten är ersatt, så att samla.py inte poolar
+    den i råa enheter med Garmins EPOC-last."""
+    k = kalla or "garmin"
+    return f"{k}_{R['last_ersatt']}" if k == "garmin" and R.get("last_ersatt") else k
 
 
 def grupp(tk):
@@ -798,6 +862,7 @@ def _kor(D, A, start, t0, tick, utfall) -> dict:
     tick('Klart', 1.0)
     return {
         'ok': True, 'utfall': utfall, 'enhet': 'slag/min' if vp else 'ms', 'spec': spec,
+        'last_ersatt': lastvag(A),   # punkt 15b: 'te'/'puls' när klockan inte ger Garmins träningslast
         'start': start, 't0': K.t0, 'n': N, 'dates': K.dates, 'rows': rows,
         'y': K.y, 'pred_base': p0, 'pred_form': p_form, 'res': res, 'form': form, 'hl': hl,
         'sjuk': sorted(sjuk),

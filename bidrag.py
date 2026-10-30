@@ -46,7 +46,9 @@ def bygg(R: dict, deltagare: str, bakgrund: dict | None = None, kalla: str | Non
     if not R.get("ok"):
         raise ValueError("Modellen har inte kunnat köras.")
     beskrivning = dict(R["beskrivning"])
-    beskrivning["kalla"] = kalla or "garmin"   # garmin: EPOC-last + 0–100-stress. oura: min×intensitet + minuter hög stress
+    # garmin: EPOC-last + 0–100-stress. oura: min×intensitet + minuter hög stress.
+    # 0.5.1 (punkt 15b): garmin_puls / garmin_te när klockan inte ger Garmins last och appen räknat en ersättning
+    beskrivning["kalla"] = modell.effektiv_kalla(R, kalla)
     # 0.4.0: vilopulsvägen (punkt 10b). Utfallet är då vilopulsen i slag/min, högre = sämre, och
     # koefficienterna går inte att pöla med HRV-bidragen. samla.py håller isär dem på det här fältet.
     beskrivning["utfall"] = R.get("utfall", "hrv")
